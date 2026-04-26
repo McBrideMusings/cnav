@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN_DIR="${CNAV_BIN_DIR:-$HOME/bin}"
+BIN_DIR="${CNAV_BIN_DIR:-$(go env GOPATH)/bin}"
 BIN_PATH="$BIN_DIR/cnav-bin"
 
 echo "→ building cnav-bin → $BIN_PATH"

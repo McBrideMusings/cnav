@@ -17,22 +17,23 @@ A child process can't change its parent shell's working directory. `cnav` is a s
 
     ./install.sh
 
-That builds `~/bin/cnav-bin` and appends a one-line `eval "$(cnav-bin init)"` to `~/.zshrc`. Open a new shell and run `cnav`.
+That builds `$GOPATH/bin/cnav-bin` and appends a one-line `eval "$(cnav-bin init)"` to `~/.zshrc`. Open a new shell and run `cnav`.
 
-`~/bin` must be on `PATH`. Override the install location with `CNAV_BIN_DIR=...`.
+`$GOPATH/bin` must be on `PATH`. Override the install location with `CNAV_BIN_DIR=...`.
 
 ## Keys
 
-| Key             | Action                                    |
-|-----------------|-------------------------------------------|
-| `tab` / `1`/`2` | switch between Chats and Projects views   |
-| `j`/`k`, arrows | move cursor                               |
-| `enter`         | primary action (cd + resume / cd into)    |
-| `c`             | cd only                                   |
-| `r`             | cd + start fresh `claude`                 |
-| `l`             | (Projects view) drill into that project   |
-| `/`             | filter                                    |
-| `q` / `esc`     | quit                                      |
+| Key                  | Action                                         |
+|----------------------|------------------------------------------------|
+| `→` / `tab` / `1`/`2` | switch views (Chats → Projects → Project chats) |
+| `←`                  | go back (Projects → Chats, Project chats → Projects) |
+| `j`/`k`, `↑`/`↓`    | move cursor                                    |
+| `enter`              | primary action (cd + resume / cd into)         |
+| `c`                  | cd only                                        |
+| `r`                  | cd + start fresh `claude`                      |
+| `l`                  | (Projects view) drill into that project        |
+| `/`                  | filter                                         |
+| `q` / `esc`          | quit                                           |
 
 ## Layout
 
