@@ -3,8 +3,11 @@ package sessions
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -30,7 +33,16 @@ type Project struct {
 	LastActivity time.Time
 }
 
-const previewMax = 120
+const (
+	previewMax         = 400
+	largeFileThreshold = 1 << 20   // 1MB
+	tailScanBytes      = 256 << 10 // 256KB tail for preview on large files
+)
+
+var (
+	xmlBlockRe = regexp.MustCompile(`(?s)<[a-zA-Z][a-zA-Z0-9-]*[^>]*>.*?</[a-zA-Z][a-zA-Z0-9-]*>`)
+	xmlTagRe   = regexp.MustCompile(`</?[a-zA-Z][a-zA-Z0-9-]*[^>]*>`)
+)
 
 // jsonl line shape we care about. Fields we don't need are ignored.
 type line struct {
@@ -123,61 +135,101 @@ func parseSession(path string) (*Session, error) {
 		Started: fi.ModTime(),
 	}
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	var lastPreview, lastAssistantPreview string
 	var seenFirstUser bool
-	for sc.Scan() {
-		var l line
-		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
-			continue
+
+	isLarge := fi.Size() > largeFileThreshold
+	if isLarge {
+		scanSessionLines(f, s, 50, true, false, &seenFirstUser, &lastPreview, &lastAssistantPreview, path)
+
+		tailOffset := fi.Size() - tailScanBytes
+		if tailOffset < 0 {
+			tailOffset = 0
 		}
-		if s.ID == "" && l.SessionID != "" {
-			s.ID = l.SessionID
+		if _, err := f.Seek(tailOffset, io.SeekStart); err == nil {
+			br := bufio.NewReaderSize(f, 1024*1024)
+			br.ReadString('\n') // discard potentially partial first line
+			scanSessionLines(br, s, 0, false, true, &seenFirstUser, &lastPreview, &lastAssistantPreview, path)
 		}
-		if s.CWD == "" && l.CWD != "" {
-			s.CWD = l.CWD
-		}
-		if len(l.Message) > 0 {
-			var um userMsg
-			if err := json.Unmarshal(l.Message, &um); err == nil {
-				switch um.Role {
-				case "user":
-					if !seenFirstUser {
-						seenFirstUser = true
-						if l.Timestamp != "" {
-							if t, err := time.Parse(time.RFC3339Nano, l.Timestamp); err == nil {
-								s.Started = t
-							}
-						}
-					}
-					if text := extractText(um.Content); text != "" && !isSkippableCommand(text) {
-						lastPreview = text
-					}
-				case "assistant":
-					if text := extractAssistantText(um.Content); text != "" {
-						lastAssistantPreview = text
-					}
-				}
-			}
-		}
+	} else {
+		scanSessionLines(f, s, 0, true, true, &seenFirstUser, &lastPreview, &lastAssistantPreview, path)
 	}
+
 	s.Preview = lastPreview
 	s.AssistantPreview = lastAssistantPreview
 
 	if s.ID == "" {
-		// Fall back to filename stem.
 		base := filepath.Base(path)
 		s.ID = strings.TrimSuffix(base, ".jsonl")
 	}
 	if s.CWD == "" {
-		// Fall back to slug → path. Best-effort: replace leading "-" then "-" → "/".
 		dir := filepath.Base(filepath.Dir(path))
 		if strings.HasPrefix(dir, "-") {
 			s.CWD = "/" + strings.ReplaceAll(dir[1:], "-", "/")
 		}
 	}
 	return s, nil
+}
+
+func scanSessionLines(r io.Reader, s *Session, lineLimit int, wantMeta, wantPreview bool, seenFirstUser *bool, lastPreview, lastAssistantPreview *string, path string) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
+
+	lineCount := 0
+	for sc.Scan() {
+		lineCount++
+		var l line
+		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
+			continue
+		}
+
+		if wantMeta {
+			if s.ID == "" && l.SessionID != "" {
+				s.ID = l.SessionID
+			}
+			if s.CWD == "" && l.CWD != "" {
+				s.CWD = l.CWD
+			}
+		}
+
+		if (wantMeta || wantPreview) && len(l.Message) > 0 {
+			var um userMsg
+			if err := json.Unmarshal(l.Message, &um); err != nil {
+				continue
+			}
+
+			switch um.Role {
+			case "user":
+				if wantMeta && !*seenFirstUser {
+					*seenFirstUser = true
+					if l.Timestamp != "" {
+						if t, err := time.Parse(time.RFC3339Nano, l.Timestamp); err == nil {
+							s.Started = t
+						}
+					}
+				}
+				if wantPreview {
+					if text := extractText(um.Content); text != "" && !isSkippableCommand(text) {
+						*lastPreview = text
+					}
+				}
+			case "assistant":
+				if wantPreview {
+					if text := extractAssistantText(um.Content); text != "" {
+						*lastAssistantPreview = text
+					}
+				}
+			}
+		}
+
+		if lineLimit > 0 && lineCount >= lineLimit {
+			break
+		}
+	}
+
+	if err := sc.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "cnav: scanner error in %s: %v\n", path, err)
+	}
 }
 
 // extractAssistantText pulls the first text block from an assistant content array,
@@ -220,11 +272,19 @@ func extractText(raw json.RawMessage) string {
 }
 
 func isSkippableCommand(s string) bool {
-	return s == "/clear"
+	return s == "/clear" || s == "/compact" || s == "/reset"
+}
+
+func stripTags(s string) string {
+	s = xmlBlockRe.ReplaceAllString(s, " ")
+	s = xmlTagRe.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
 }
 
 func truncate(s string, n int) string {
+	s = stripTags(s)
 	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.Join(strings.Fields(s), " ")
 	if len([]rune(s)) <= n {
 		return s
 	}
