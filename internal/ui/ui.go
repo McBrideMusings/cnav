@@ -123,6 +123,26 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.activate(actionNewClaude)
 	case "l":
 		return m.activate(actionDrillIn)
+	case "right":
+		switch m.view {
+		case viewChats:
+			m.view = viewProjects
+			m.cursor = 0
+		case viewProjects:
+			if len(m.filteredProjects()) > 0 {
+				return m.activate(actionDrillIn)
+			}
+		}
+	case "left":
+		switch m.view {
+		case viewProjects:
+			m.view = viewChats
+			m.cursor = 0
+		case viewProjectChats:
+			m.view = viewProjects
+			m.cursor = 0
+			m.focusProject = nil
+		}
 	}
 	return m, nil
 }
@@ -360,10 +380,12 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 
 func (m Model) footerKeys() string {
 	switch m.view {
-	case viewChats, viewProjectChats:
-		return "↵ cd+resume   c cd   r cd+claude   tab/1/2 switch view   / filter   q quit"
+	case viewChats:
+		return "↵ cd+resume   c cd   r cd+claude   →/tab/1/2 switch view   / filter   q quit"
+	case viewProjectChats:
+		return "↵ cd+resume   c cd   r cd+claude   ← back   / filter   q quit"
 	case viewProjects:
-		return "↵ cd   l list chats   r cd+claude   tab/1/2 switch view   / filter   q quit"
+		return "↵ cd   →/l list chats   r cd+claude   ←/tab/1/2 switch view   / filter   q quit"
 	}
 	return ""
 }
