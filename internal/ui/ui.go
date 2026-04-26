@@ -228,11 +228,25 @@ func (m Model) sortedProjects() []*sessions.Project {
 		out := make([]*sessions.Project, len(list))
 		copy(out, list)
 		sort.Slice(out, func(i, j int) bool {
-			return filepath.Base(out[i].CWD) < filepath.Base(out[j].CWD)
+			return projectLabel(out[i].CWD) < projectLabel(out[j].CWD)
 		})
 		return out
 	}
 	return list
+}
+
+func (m Model) filteredProjects() []*sessions.Project {
+	if m.filter == "" {
+		return m.projects
+	}
+	q := strings.ToLower(m.filter)
+	var out []*sessions.Project
+	for _, p := range m.projects {
+		if strings.Contains(strings.ToLower(p.CWD), q) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (m Model) filteredSessions() []*sessions.Session {
@@ -245,20 +259,6 @@ func (m Model) filteredSessions() []*sessions.Session {
 		if strings.Contains(strings.ToLower(s.CWD), q) ||
 			strings.Contains(strings.ToLower(s.Preview), q) {
 			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func (m Model) filteredProjects() []*sessions.Project {
-	if m.filter == "" {
-		return m.projects
-	}
-	q := strings.ToLower(m.filter)
-	var out []*sessions.Project
-	for _, p := range m.projects {
-		if strings.Contains(strings.ToLower(p.CWD), q) {
-			out = append(out, p)
 		}
 	}
 	return out
@@ -324,7 +324,7 @@ func (m Model) renderSessionList(list []*sessions.Session, h int) string {
 	for i := start; i < end; i++ {
 		s := list[i]
 		ago := humanAgo(s.Started)
-		proj := filepath.Base(s.CWD)
+		proj := projectLabel(s.CWD)
 		preview := s.Preview
 		if preview == "" {
 			preview = dimStyle.Render("(no user message)")
@@ -350,7 +350,8 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 		p := list[i]
 		ago := humanAgo(p.LastActivity)
 		count := fmt.Sprintf("%d session%s", len(p.Sessions), plural(len(p.Sessions)))
-		line := fmt.Sprintf("%-10s  %-12s  %s", ago, count, truncRunes(p.CWD, m.width-30))
+		label := projectLabel(p.CWD)
+		line := fmt.Sprintf("%-10s  %-12s  %s", ago, count, truncRunes(label, m.width-30))
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
 		} else {
@@ -372,6 +373,14 @@ func (m Model) footerKeys() string {
 }
 
 // ---------- helpers ----------
+
+func projectLabel(cwd string) string {
+	const wtSep = "/.worktrees/"
+	if idx := strings.Index(cwd, wtSep); idx >= 0 {
+		return filepath.Base(cwd[:idx]) + " → " + cwd[idx+len(wtSep):]
+	}
+	return filepath.Base(cwd)
+}
 
 func humanAgo(t time.Time) string {
 	if t.IsZero() {
