@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -259,16 +260,22 @@ func (m Model) filteredSessions() []*sessions.Session {
 
 // ---------- view ----------
 
+var rnd = lipgloss.NewRenderer(os.Stderr)
+
 var (
-	dimStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	hiStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("12"))
-	tabActive = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Underline(true).Padding(0, 1)
-	tabIdle   = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Padding(0, 1)
+	orange    = lipgloss.Color("#D4825A")
+	dimStyle  = rnd.NewStyle().Foreground(lipgloss.Color("241"))
+	hiStyle   = rnd.NewStyle().Foreground(lipgloss.Color("0")).Background(orange)
+	tabActive = rnd.NewStyle().Bold(true).Foreground(orange).Underline(true).Padding(0, 1)
+	tabIdle   = rnd.NewStyle().Foreground(lipgloss.Color("244")).Padding(0, 1)
+	toolStyle = rnd.NewStyle().Bold(true).Foreground(orange)
 )
 
 func (m Model) View() string {
 	var b strings.Builder
 
+	b.WriteString(toolStyle.Render("cnav"))
+	b.WriteString(" ")
 	if m.view == viewChats {
 		b.WriteString(tabActive.Render("▸ Chats"))
 		b.WriteString(tabIdle.Render("  Projects"))
