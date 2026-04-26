@@ -252,7 +252,7 @@ func (m Model) filteredSessions() []*sessions.Session {
 	q := strings.ToLower(m.filter)
 	var out []*sessions.Session
 	for _, s := range m.sessions {
-		if containsCI(s.CWD, q) || containsCI(s.Preview, q) || containsCI(projectLabel(s.CWD), q) {
+		if containsCI(s.CWD, q) || containsCI(projectLabel(s.CWD), q) || containsCI(s.Preview, q) {
 			out = append(out, s)
 		}
 	}
@@ -384,8 +384,11 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 		p := list[i]
 		ago := humanAgo(p.LastActivity)
 		count := fmt.Sprintf("%d session%s", len(p.Sessions), plural(len(p.Sessions)))
-		label := formatProjectLabel(p.CWD)
-		line := fmt.Sprintf("%-10s  %-12s  %s", ago, count, truncRunes(label, m.width-30))
+		label := truncRunes(projectLabel(p.CWD), m.width-30)
+		if isWorktree(p.CWD) {
+			label = "⎇ " + label
+		}
+		line := fmt.Sprintf("%-10s  %-12s  %s", ago, count, label)
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
 		} else {
@@ -411,32 +414,27 @@ func (m Model) footerKeys() string {
 
 // ---------- helpers ----------
 
+const wtSep = "/.worktrees/"
+
+func isWorktree(cwd string) bool {
+	_, _, found := strings.Cut(cwd, wtSep)
+	return found
+}
+
 func projectLabel(cwd string) string {
-	const wtSep = "/.worktrees/"
-	if idx := strings.Index(cwd, wtSep); idx >= 0 {
-		return filepath.Base(cwd[:idx]) + " → " + cwd[idx+len(wtSep):]
+	if before, after, ok := strings.Cut(cwd, wtSep); ok {
+		return filepath.Base(before) + " → " + after
 	}
 	return filepath.Base(cwd)
 }
 
-// formatProjectLabel wraps projectLabel with a worktree indicator for list rendering.
-func formatProjectLabel(cwd string) string {
-	label := projectLabel(cwd)
-	if strings.Contains(cwd, "/.worktrees/") {
-		label = "⎇ " + label
-	}
-	return label
-}
-
-// chatLabel is like projectLabel but falls back to just the branch name for worktrees that won't fit in n runes.
 func chatLabel(cwd string, n int) string {
-	const wtSep = "/.worktrees/"
-	if idx := strings.Index(cwd, wtSep); idx >= 0 {
+	if _, after, ok := strings.Cut(cwd, wtSep); ok {
 		full := projectLabel(cwd)
 		if len([]rune(full)) <= n {
 			return full
 		}
-		return truncRunes(cwd[idx+len(wtSep):], n)
+		return truncRunes(after, n)
 	}
 	return truncRunes(filepath.Base(cwd), n)
 }
