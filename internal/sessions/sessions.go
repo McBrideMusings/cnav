@@ -52,9 +52,10 @@ var (
 )
 
 type scanState struct {
-	seenFirstUser        bool
-	lastPreview          string
-	lastAssistantPreview string
+	seenFirstUser           bool
+	lastPreview             string
+	longestAssistantPreview string
+	longestAssistantLen     int
 }
 
 // jsonl line shape we care about. Fields we don't need are ignored.
@@ -174,7 +175,7 @@ func parseSession(path string) (*Session, error) {
 	}
 
 	s.Preview = state.lastPreview
-	s.AssistantPreview = state.lastAssistantPreview
+	s.AssistantPreview = state.longestAssistantPreview
 
 	if s.ID == "" {
 		base := filepath.Base(path)
@@ -233,8 +234,9 @@ func scanSessionLines(r io.Reader, s *Session, lineLimit int, wantMeta, wantPrev
 				}
 			case "assistant":
 				if wantPreview {
-					if text := extractAssistantText(um.Content); text != "" {
-						state.lastAssistantPreview = text
+					if text := extractAssistantText(um.Content); len([]rune(text)) > state.longestAssistantLen {
+						state.longestAssistantPreview = text
+						state.longestAssistantLen = len([]rune(text))
 					}
 				}
 			}
@@ -253,7 +255,7 @@ func scanSessionLines(r io.Reader, s *Session, lineLimit int, wantMeta, wantPrev
 	}
 }
 
-// extractAssistantText pulls the first text block from an assistant content array,
+// extractAssistantText pulls the longest text block from an assistant content array,
 // skipping thinking blocks.
 func extractAssistantText(raw json.RawMessage) string {
 	var blocks []struct {
@@ -263,12 +265,16 @@ func extractAssistantText(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return ""
 	}
+	var best string
 	for _, b := range blocks {
-		if b.Type == "text" && b.Text != "" {
-			return truncate(strings.TrimSpace(b.Text), previewMax)
+		if b.Type == "text" && len(b.Text) > len(best) {
+			best = b.Text
 		}
 	}
-	return ""
+	if best == "" {
+		return ""
+	}
+	return truncate(strings.TrimSpace(best), previewMax)
 }
 
 // extractText pulls human-readable text out of a user message Content field,

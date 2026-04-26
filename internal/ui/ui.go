@@ -252,7 +252,11 @@ func (m Model) filteredSessions() []*sessions.Session {
 	q := strings.ToLower(m.filter)
 	var out []*sessions.Session
 	for _, s := range m.sessions {
-		if containsCI(s.CWD, q) || containsCI(projectLabel(s.CWD), q) || containsCI(s.Preview, q) {
+		previewMatch := containsCI(s.Preview, q)
+		if m.showAssistant {
+			previewMatch = previewMatch || containsCI(s.AssistantPreview, q)
+		}
+		if containsCI(s.CWD, q) || containsCI(projectLabel(s.CWD), q) || previewMatch {
 			out = append(out, s)
 		}
 	}
@@ -323,13 +327,11 @@ func (m Model) stateIndicators() string {
 	}
 	parts = append(parts, "sort:"+sortLabel)
 
-	if m.view == viewChats {
-		preview := "you"
-		if m.showAssistant {
-			preview = "claude"
-		}
-		parts = append(parts, "preview:"+preview)
+	preview := "you"
+	if m.showAssistant {
+		preview = "claude"
 	}
+	parts = append(parts, "preview:"+preview)
 
 	if m.filter != "" || m.filtering {
 		caret := ""
@@ -351,8 +353,10 @@ func (m Model) renderSessionList(list []*sessions.Session, h int) string {
 	for i := start; i < end; i++ {
 		s := list[i]
 		ago := humanAgo(s.Started)
+		indicator := dimStyle.Render("you ")
 		var preview string
 		if m.showAssistant {
+			indicator = dimStyle.Render("ai  ")
 			preview = s.AssistantPreview
 			if preview == "" {
 				preview = dimStyle.Render("(no assistant message)")
@@ -363,7 +367,7 @@ func (m Model) renderSessionList(list []*sessions.Session, h int) string {
 				preview = dimStyle.Render("(no user message)")
 			}
 		}
-		line := fmt.Sprintf("%-10s  %-22s  %s", ago, chatLabel(s.CWD, 22), truncRunes(preview, m.width-40))
+		line := fmt.Sprintf("%-10s  %-22s  %s%s", ago, chatLabel(s.CWD, 22), indicator, truncRunes(preview, m.width-42))
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
 		} else {
@@ -384,11 +388,30 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 		p := list[i]
 		ago := humanAgo(p.LastActivity)
 		count := fmt.Sprintf("%d session%s", len(p.Sessions), plural(len(p.Sessions)))
-		label := truncRunes(projectLabel(p.CWD), m.width-30)
+		label := truncRunes(projectLabel(p.CWD), 16)
 		if isWorktree(p.CWD) {
-			label = "⎇ " + label
+			label = "⎇ " + truncRunes(projectLabel(p.CWD), 14)
 		}
-		line := fmt.Sprintf("%-10s  %-12s  %s", ago, count, label)
+		indicator := dimStyle.Render("you ")
+		var previewText string
+		if len(p.Sessions) > 0 {
+			s := p.Sessions[0]
+			if m.showAssistant {
+				indicator = dimStyle.Render("ai  ")
+				previewText = s.AssistantPreview
+				if previewText == "" {
+					previewText = dimStyle.Render("(no assistant message)")
+				}
+			} else {
+				previewText = s.Preview
+				if previewText == "" {
+					previewText = dimStyle.Render("(no user message)")
+				}
+			}
+		} else {
+			previewText = dimStyle.Render("(no sessions)")
+		}
+		line := fmt.Sprintf("%-10s  %-12s  %-16s  %s%s", ago, count, label, indicator, truncRunes(previewText, m.width-50))
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
 		} else {
@@ -407,7 +430,7 @@ func (m Model) footerKeys() string {
 	case viewChats:
 		return "↵  cd+resume   shift+↵  cd   c cd   ← → tab   s sort   p preview   / filter   q quit"
 	case viewProjects:
-		return "↵  cd+claude   shift+↵  cd   c cd   ← → tab   s sort   / filter   q quit"
+		return "↵  cd+claude   shift+↵  cd   c cd   ← → tab   s sort   p preview   / filter   q quit"
 	}
 	return ""
 }
