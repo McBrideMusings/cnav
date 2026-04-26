@@ -90,7 +90,14 @@ func Scan(claudeProjectsDir string) ([]*Session, error) {
 	wg.Wait()
 
 	out := slices.DeleteFunc(sessions, func(s *Session) bool {
-		return s == nil
+		if s == nil {
+			return true
+		}
+		if strings.Contains(s.CWD, "/.worktrees/") {
+			_, err := os.Stat(s.CWD)
+			return err != nil
+		}
+		return false
 	})
 
 	sort.Slice(out, func(i, j int) bool {
