@@ -177,6 +177,11 @@ func (m Model) activate(kind actionKind) (tea.Model, tea.Cmd) {
 		}
 
 	case viewProjectChats:
+		if m.focusProject == nil {
+			m.view = viewProjects
+			m.cursor = 0
+			return m, nil
+		}
 		list := m.focusProject.Sessions
 		if len(list) == 0 {
 			return m, nil
@@ -204,7 +209,9 @@ func (m Model) maxCursor() int {
 	case viewProjects:
 		n = len(m.filteredProjects())
 	case viewProjectChats:
-		n = len(m.focusProject.Sessions)
+		if m.focusProject != nil {
+			n = len(m.focusProject.Sessions)
+		}
 	}
 	if n == 0 {
 		return 0
@@ -257,15 +264,14 @@ func (m Model) View() string {
 	// Tabs.
 	t1 := "1 Chats"
 	t2 := "2 Projects"
-	if m.view == viewChats {
-		b.WriteString(tabActive.Render(t1))
-		b.WriteString(tabIdle.Render(t2))
-	} else if m.view == viewProjects {
-		b.WriteString(tabIdle.Render(t1))
-		b.WriteString(tabActive.Render(t2))
-	} else {
-		b.WriteString(tabIdle.Render(t1))
-		b.WriteString(tabIdle.Render(t2))
+	style1 := tabActive
+	style2 := tabIdle
+	if m.view == viewProjects {
+		style1, style2 = style2, style1
+	}
+	b.WriteString(style1.Render(t1))
+	b.WriteString(style2.Render(t2))
+	if m.view == viewProjectChats && m.focusProject != nil {
 		b.WriteString(tabActive.Render("→ " + filepath.Base(m.focusProject.CWD)))
 	}
 	b.WriteString("\n\n")
@@ -290,7 +296,9 @@ func (m Model) View() string {
 	case viewProjects:
 		b.WriteString(m.renderProjectList(m.filteredProjects(), listH))
 	case viewProjectChats:
-		b.WriteString(m.renderSessionList(m.focusProject.Sessions, listH, false))
+		if m.focusProject != nil {
+			b.WriteString(m.renderSessionList(m.focusProject.Sessions, listH, false))
+		}
 	}
 
 	// Footer.

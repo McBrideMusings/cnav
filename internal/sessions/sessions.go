@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -87,13 +88,9 @@ func Scan(claudeProjectsDir string) ([]*Session, error) {
 	}
 	wg.Wait()
 
-	// Compact nils.
-	out := sessions[:0]
-	for _, s := range sessions {
-		if s != nil {
-			out = append(out, s)
-		}
-	}
+	out := slices.DeleteFunc(sessions, func(s *Session) bool {
+		return s == nil
+	})
 
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Started.After(out[j].Started)
@@ -220,10 +217,10 @@ func GroupByProject(sessions []*Session) []*Project {
 }
 
 // DefaultProjectsDir returns ~/.claude/projects.
-func DefaultProjectsDir() string {
+func DefaultProjectsDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return filepath.Join(home, ".claude", "projects")
+	return filepath.Join(home, ".claude", "projects"), nil
 }

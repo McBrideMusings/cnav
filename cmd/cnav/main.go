@@ -23,7 +23,11 @@ func main() {
 		}
 	}
 
-	dir := sessions.DefaultProjectsDir()
+	dir, err := sessions.DefaultProjectsDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cnav: locate home dir:", err)
+		os.Exit(1)
+	}
 	ss, err := sessions.Scan(dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cnav: scan:", err)
@@ -36,20 +40,19 @@ func main() {
 
 	// TUI on stderr so stdout stays clean for the wrapper to eval.
 	p := tea.NewProgram(ui.New(ss), tea.WithOutput(os.Stderr), tea.WithAltScreen())
-	final, err := p.Run()
+	m, err := p.Run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cnav:", err)
 		os.Exit(1)
 	}
-	m := final.(ui.Model)
-	if !m.Done {
+	model, ok := m.(ui.Model)
+	if !ok || !model.Done {
 		return
 	}
-	cmd := m.Action.Render()
-	if cmd == "" {
-		return
+	cmd := model.Action.Render()
+	if cmd != "" {
+		fmt.Println(cmd)
 	}
-	fmt.Println(cmd)
 }
 
 func printHelp() {

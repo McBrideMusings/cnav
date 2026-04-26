@@ -30,7 +30,8 @@ func (a Action) Render() string {
 
 // quote single-quotes a string for safe shell eval.
 func quote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	escaped := strings.ReplaceAll(s, "'", `'\''`)
+	return "'" + escaped + "'"
 }
 
 // WrapperScript is the zsh/bash function the user installs.
