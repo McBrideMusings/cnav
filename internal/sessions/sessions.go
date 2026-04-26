@@ -34,15 +34,22 @@ type Project struct {
 }
 
 const (
-	previewMax         = 400
-	largeFileThreshold = 1 << 20   // 1MB
+	previewMax         = 2000
+	largeFileThreshold = 5 << 20   // 5MB
 	tailScanBytes      = 256 << 10 // 256KB tail for preview on large files
+	sysTagRe           = `local-command-caveat|command-message|command-name|command-args|system-reminder`
 )
 
 var (
-	xmlBlockRe = regexp.MustCompile(`(?s)<[a-zA-Z][a-zA-Z0-9-]*[^>]*>.*?</[a-zA-Z][a-zA-Z0-9-]*>`)
-	xmlTagRe   = regexp.MustCompile(`</?[a-zA-Z][a-zA-Z0-9-]*[^>]*>`)
+	xmlBlockRe = regexp.MustCompile(`(?s)<(` + sysTagRe + `)[^>]*>.*?</\1>`)
+	xmlTagRe   = regexp.MustCompile(`</?(?:` + sysTagRe + `)[^>]*>`)
 )
+
+type scanState struct {
+	seenFirstUser        bool
+	lastPreview          string
+	lastAssistantPreview string
+}
 
 // jsonl line shape we care about. Fields we don't need are ignored.
 type line struct {
@@ -60,10 +67,10 @@ type userMsg struct {
 
 // Scan walks ~/.claude/projects/ and returns every session it can parse.
 // Sessions are returned sorted by Started desc.
-func Scan(claudeProjectsDir string) ([]*Session, error) {
+func Scan(claudeProjectsDir string) ([]*Session, int, error) {
 	entries, err := os.ReadDir(claudeProjectsDir)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var files []string
@@ -101,21 +108,25 @@ func Scan(claudeProjectsDir string) ([]*Session, error) {
 	}
 	wg.Wait()
 
+	hiddenCount := 0
 	out := slices.DeleteFunc(sessions, func(s *Session) bool {
 		if s == nil {
 			return true
 		}
-		if strings.Contains(s.CWD, "/.worktrees/") {
-			_, err := os.Stat(s.CWD)
-			return err != nil
+		if !strings.Contains(s.CWD, "/.worktrees/") {
+			return false
 		}
-		return false
+		if _, err := os.Stat(s.CWD); err == nil {
+			return false
+		}
+		hiddenCount++
+		return true
 	})
 
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Started.After(out[j].Started)
 	})
-	return out, nil
+	return out, hiddenCount, nil
 }
 
 func parseSession(path string) (*Session, error) {
@@ -135,28 +146,29 @@ func parseSession(path string) (*Session, error) {
 		Started: fi.ModTime(),
 	}
 
-	var lastPreview, lastAssistantPreview string
-	var seenFirstUser bool
+	state := &scanState{}
 
 	isLarge := fi.Size() > largeFileThreshold
 	if isLarge {
-		scanSessionLines(f, s, 50, true, false, &seenFirstUser, &lastPreview, &lastAssistantPreview, path)
+		scanSessionLines(f, s, 200, true, false, state, path)
 
 		tailOffset := fi.Size() - tailScanBytes
-		if tailOffset < 0 {
-			tailOffset = 0
-		}
 		if _, err := f.Seek(tailOffset, io.SeekStart); err == nil {
 			br := bufio.NewReaderSize(f, 1024*1024)
-			br.ReadString('\n') // discard potentially partial first line
-			scanSessionLines(br, s, 0, false, true, &seenFirstUser, &lastPreview, &lastAssistantPreview, path)
+			if _, err := br.ReadString('\n'); err == nil || err == io.EOF {
+				scanSessionLines(br, s, 0, false, true, state, path)
+			} else {
+				if _, seekErr := f.Seek(0, io.SeekStart); seekErr == nil {
+					scanSessionLines(f, s, 0, false, true, state, path)
+				}
+			}
 		}
 	} else {
-		scanSessionLines(f, s, 0, true, true, &seenFirstUser, &lastPreview, &lastAssistantPreview, path)
+		scanSessionLines(f, s, 0, true, true, state, path)
 	}
 
-	s.Preview = lastPreview
-	s.AssistantPreview = lastAssistantPreview
+	s.Preview = state.lastPreview
+	s.AssistantPreview = state.lastAssistantPreview
 
 	if s.ID == "" {
 		base := filepath.Base(path)
@@ -171,7 +183,7 @@ func parseSession(path string) (*Session, error) {
 	return s, nil
 }
 
-func scanSessionLines(r io.Reader, s *Session, lineLimit int, wantMeta, wantPreview bool, seenFirstUser *bool, lastPreview, lastAssistantPreview *string, path string) {
+func scanSessionLines(r io.Reader, s *Session, lineLimit int, wantMeta, wantPreview bool, state *scanState, path string) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 
@@ -200,8 +212,8 @@ func scanSessionLines(r io.Reader, s *Session, lineLimit int, wantMeta, wantPrev
 
 			switch um.Role {
 			case "user":
-				if wantMeta && !*seenFirstUser {
-					*seenFirstUser = true
+				if !state.seenFirstUser {
+					state.seenFirstUser = true
 					if l.Timestamp != "" {
 						if t, err := time.Parse(time.RFC3339Nano, l.Timestamp); err == nil {
 							s.Started = t
@@ -210,18 +222,21 @@ func scanSessionLines(r io.Reader, s *Session, lineLimit int, wantMeta, wantPrev
 				}
 				if wantPreview {
 					if text := extractText(um.Content); text != "" && !isSkippableCommand(text) {
-						*lastPreview = text
+						state.lastPreview = text
 					}
 				}
 			case "assistant":
 				if wantPreview {
 					if text := extractAssistantText(um.Content); text != "" {
-						*lastAssistantPreview = text
+						state.lastAssistantPreview = text
 					}
 				}
 			}
 		}
 
+		if wantMeta && !wantPreview && state.seenFirstUser && s.ID != "" && s.CWD != "" {
+			break
+		}
 		if lineLimit > 0 && lineCount >= lineLimit {
 			break
 		}
@@ -272,7 +287,14 @@ func extractText(raw json.RawMessage) string {
 }
 
 func isSkippableCommand(s string) bool {
-	return s == "/clear" || s == "/compact" || s == "/reset"
+	if s == "" {
+		return false
+	}
+	switch strings.Fields(s)[0] {
+	case "/clear", "/compact", "/reset":
+		return true
+	}
+	return false
 }
 
 func stripTags(s string) string {

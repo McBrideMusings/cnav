@@ -33,24 +33,26 @@ type Model struct {
 	sessions []*sessions.Session
 	projects []*sessions.Project
 
-	view          viewID
-	cursor        int
-	filter        string
-	filtering     bool
-	sort          sortOrder
-	showAssistant bool
-	width         int
-	height        int
+	view                viewID
+	cursor              int
+	filter              string
+	filtering           bool
+	sort                sortOrder
+	showAssistant       bool
+	width               int
+	height              int
+	hiddenWorktreeCount int
 
 	Action shell.Action
 	Done   bool
 }
 
-func New(ss []*sessions.Session) Model {
+func New(ss []*sessions.Session, hiddenWorktreeCount int) Model {
 	return Model{
-		sessions: ss,
-		projects: sessions.GroupByProject(ss),
-		view:     viewChats,
+		sessions:            ss,
+		projects:            sessions.GroupByProject(ss),
+		view:                viewChats,
+		hiddenWorktreeCount: hiddenWorktreeCount,
 	}
 }
 
@@ -209,7 +211,7 @@ func (m Model) sortedSessions() []*sessions.Session {
 		out := make([]*sessions.Session, len(list))
 		copy(out, list)
 		sort.Slice(out, func(i, j int) bool {
-			return filepath.Base(out[i].CWD) < filepath.Base(out[j].CWD)
+			return projectLabel(out[i].CWD) < projectLabel(out[j].CWD)
 		})
 		return out
 	}
@@ -236,7 +238,7 @@ func (m Model) filteredProjects() []*sessions.Project {
 	q := strings.ToLower(m.filter)
 	var out []*sessions.Project
 	for _, p := range m.projects {
-		if strings.Contains(strings.ToLower(p.CWD), q) {
+		if containsCI(p.CWD, q) || containsCI(projectLabel(p.CWD), q) {
 			out = append(out, p)
 		}
 	}
@@ -250,8 +252,7 @@ func (m Model) filteredSessions() []*sessions.Session {
 	q := strings.ToLower(m.filter)
 	var out []*sessions.Session
 	for _, s := range m.sessions {
-		if strings.Contains(strings.ToLower(s.CWD), q) ||
-			strings.Contains(strings.ToLower(s.Preview), q) {
+		if containsCI(s.CWD, q) || containsCI(s.Preview, q) || containsCI(projectLabel(s.CWD), q) {
 			out = append(out, s)
 		}
 	}
@@ -288,6 +289,9 @@ func (m Model) View() string {
 	b.WriteString("\n\n")
 
 	listH := m.height - 4
+	if m.hiddenWorktreeCount > 0 {
+		listH--
+	}
 	if listH < 5 {
 		listH = 5
 	}
@@ -296,6 +300,13 @@ func (m Model) View() string {
 		b.WriteString(m.renderSessionList(m.sortedSessions(), listH))
 	case viewProjects:
 		b.WriteString(m.renderProjectList(m.sortedProjects(), listH))
+	}
+
+	if m.hiddenWorktreeCount > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf(
+			"  (%d worktree session%s hidden — directories deleted)",
+			m.hiddenWorktreeCount, plural(m.hiddenWorktreeCount))))
+		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
@@ -340,7 +351,6 @@ func (m Model) renderSessionList(list []*sessions.Session, h int) string {
 	for i := start; i < end; i++ {
 		s := list[i]
 		ago := humanAgo(s.Started)
-		proj := projectLabel(s.CWD)
 		var preview string
 		if m.showAssistant {
 			preview = s.AssistantPreview
@@ -353,7 +363,7 @@ func (m Model) renderSessionList(list []*sessions.Session, h int) string {
 				preview = dimStyle.Render("(no user message)")
 			}
 		}
-		line := fmt.Sprintf("%-10s  %-22s  %s", ago, truncRunes(proj, 22), truncRunes(preview, m.width-40))
+		line := fmt.Sprintf("%-10s  %-22s  %s", ago, chatLabel(s.CWD, 22), truncRunes(preview, m.width-40))
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
 		} else {
@@ -374,7 +384,7 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 		p := list[i]
 		ago := humanAgo(p.LastActivity)
 		count := fmt.Sprintf("%d session%s", len(p.Sessions), plural(len(p.Sessions)))
-		label := projectLabel(p.CWD)
+		label := formatProjectLabel(p.CWD)
 		line := fmt.Sprintf("%-10s  %-12s  %s", ago, count, truncRunes(label, m.width-30))
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
@@ -407,6 +417,28 @@ func projectLabel(cwd string) string {
 		return filepath.Base(cwd[:idx]) + " → " + cwd[idx+len(wtSep):]
 	}
 	return filepath.Base(cwd)
+}
+
+// formatProjectLabel wraps projectLabel with a worktree indicator for list rendering.
+func formatProjectLabel(cwd string) string {
+	label := projectLabel(cwd)
+	if strings.Contains(cwd, "/.worktrees/") {
+		label = "⎇ " + label
+	}
+	return label
+}
+
+// chatLabel is like projectLabel but falls back to just the branch name for worktrees that won't fit in n runes.
+func chatLabel(cwd string, n int) string {
+	const wtSep = "/.worktrees/"
+	if idx := strings.Index(cwd, wtSep); idx >= 0 {
+		full := projectLabel(cwd)
+		if len([]rune(full)) <= n {
+			return full
+		}
+		return truncRunes(cwd[idx+len(wtSep):], n)
+	}
+	return truncRunes(filepath.Base(cwd), n)
 }
 
 func humanAgo(t time.Time) string {
@@ -465,4 +497,8 @@ func windowAround(cursor, total, h int) (int, int) {
 		start = end - h
 	}
 	return start, end
+}
+
+func containsCI(haystack, needle string) bool {
+	return strings.Contains(strings.ToLower(haystack), needle)
 }

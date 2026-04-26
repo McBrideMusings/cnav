@@ -28,7 +28,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "cnav: locate home dir:", err)
 		os.Exit(1)
 	}
-	ss, err := sessions.Scan(dir)
+	ss, hidden, err := sessions.Scan(dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cnav: scan:", err)
 		os.Exit(1)
@@ -39,7 +39,7 @@ func main() {
 	}
 
 	// TUI on stderr so stdout stays clean for the wrapper to eval.
-	p := tea.NewProgram(ui.New(ss), tea.WithOutput(os.Stderr), tea.WithAltScreen())
+	p := tea.NewProgram(ui.New(ss, hidden), tea.WithOutput(os.Stderr), tea.WithAltScreen())
 	m, err := p.Run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cnav:", err)
