@@ -1,6 +1,6 @@
 project_name = "Cnav"
 python_min   = "3.11"
-generator_commit = "f072ebdd5b470117f6ff17f4a934d2c6c6230e89+dirty"
+generator_commit = "7ed715e7c09eb60644e13bfc6741f9ed6aea45f6"
 archetypes = []
 order = ["build", "dev", "deploy", "---", "test", "vet", "fmt", "clean", "docs"]
 
@@ -13,8 +13,8 @@ desc ="Run cnav locally"
 run ="go run ./cmd/cnav"
 
 [commands.deploy]
-desc ="Install binaries into GOBIN"
-run ="go install ./..."
+desc ="Install cnav-bin to GOPATH/bin"
+run ="go build -o ${GOPATH:-$HOME/go}/bin/cnav-bin ./cmd/cnav"
 
 [commands.test]
 desc ="Run all tests"

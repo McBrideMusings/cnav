@@ -23,17 +23,18 @@ That builds `$GOPATH/bin/cnav-bin` and appends a one-line `eval "$(cnav-bin init
 
 ## Keys
 
-| Key                  | Action                                         |
-|----------------------|------------------------------------------------|
-| `→` / `tab` / `1`/`2` | switch views (Chats → Projects → Project chats) |
-| `←`                  | go back (Projects → Chats, Project chats → Projects) |
-| `j`/`k`, `↑`/`↓`    | move cursor                                    |
-| `enter`              | primary action (cd + resume / cd into)         |
-| `c`                  | cd only                                        |
-| `r`                  | cd + start fresh `claude`                      |
-| `l`                  | (Projects view) drill into that project        |
-| `/`                  | filter                                         |
-| `q` / `esc`          | quit                                           |
+| Key                     | Action                                              |
+|-------------------------|-----------------------------------------------------|
+| `tab` / `←` / `→`      | toggle between Chats and Projects                   |
+| `1` / `2`               | jump to Chats / Projects view                       |
+| `j`/`k`, `↑`/`↓`       | move cursor                                         |
+| `enter` (Chats)         | cd + resume that chat                               |
+| `enter` (Projects)      | cd + launch fresh `claude`                          |
+| `c`                     | cd only                                             |
+| `r`                     | cd + start fresh `claude`                           |
+| `s`                     | toggle sort: recent / name                          |
+| `/`                     | filter                                              |
+| `q` / `esc`             | quit                                                |
 
 ## Layout
 

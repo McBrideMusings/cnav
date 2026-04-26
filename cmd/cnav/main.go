@@ -70,13 +70,15 @@ Install:
   3. then run 'cnav' from anywhere.
 
 Keys:
-  tab / 1 / 2   switch between Chats and Projects views
-  j / k         move cursor (or arrows)
-  enter         primary action (cd + resume / cd into project)
-  c             cd only
-  r             cd + start fresh 'claude'
-  l             (Projects view) drill into that project's chats
-  /             filter
-  q / esc       quit
+  tab / left / right   switch between Chats and Projects views
+  1 / 2                jump to Chats / Projects view
+  j / k / arrows       move cursor
+  enter                cd + resume chat  (Chats view)
+                       cd + launch claude (Projects view)
+  c                    cd only
+  r                    cd + fresh claude
+  s                    toggle sort: recent / name
+  /                    filter
+  q / esc              quit
 `)
 }
