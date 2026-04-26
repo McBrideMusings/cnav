@@ -39,6 +39,7 @@ const WrapperScript = `cnav() {
   local __cnav_cmd
   __cnav_cmd=$(command cnav-bin "$@") || return $?
   [ -n "$__cnav_cmd" ] && eval "$__cnav_cmd"
+  (( $+functions[_gdt_dir_theme] )) && _gdt_dir_theme
 }`
 
 // PrintWrapper writes the wrapper to stdout (used by --print-shell).
