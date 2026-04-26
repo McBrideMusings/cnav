@@ -47,8 +47,8 @@ That builds `$GOPATH/bin/cnav-bin` and appends a one-line `eval "$(cnav-bin init
 ## Notes
 
 - "Resume" runs `claude --resume <session-id>` after `cd`.
-- The session list is built fresh on every launch (no cache). Scanning is parallel; on a few hundred sessions it's instant.
+- The session list is built fresh on every launch (no cache). Scanning is parallel; on a few hundred sessions it's instant. Session files larger than 1 MB use a two-phase scan (first 50 lines for metadata, last 256 KB for preview) to stay fast on long sessions.
 - A session's project path comes from the first `cwd` field in its jsonl (the slug-encoded directory name isn't reversible if a path component contains `-`).
-- The preview column shows your last message by default; press `p` to switch to Claude's last reply. `/clear` is skipped when determining the last user message.
+- The preview column shows your last message by default; press `p` to switch to Claude's last reply. `/clear`, `/compact`, and `/reset` are skipped when determining the last user message. System-injected XML blocks are stripped from preview text.
 - Worktree sessions are hidden if the worktree directory no longer exists on disk.
 - Active state (sort order, preview mode, filter text) is shown inline in the header next to the tab indicator.
