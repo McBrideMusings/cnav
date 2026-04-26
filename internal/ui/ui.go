@@ -137,10 +137,10 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filter = ""
 	case "enter":
 		return m.activate()
+	case "shift+enter":
+		return m.activateCD()
 	case "c":
 		return m.activateCD()
-	case "r":
-		return m.activateNewClaude()
 	}
 	return m, nil
 }
@@ -184,16 +184,6 @@ func (m Model) activateCD() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.Action = shell.Action{Dir: dir}
-	m.Done = true
-	return m, tea.Quit
-}
-
-func (m Model) activateNewClaude() (tea.Model, tea.Cmd) {
-	dir, _ := m.selectedDir()
-	if dir == "" {
-		return m, nil
-	}
-	m.Action = shell.Action{Dir: dir, NewClaude: true}
 	m.Done = true
 	return m, tea.Quit
 }
@@ -272,32 +262,25 @@ func (m Model) filteredSessions() []*sessions.Session {
 var (
 	dimStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	hiStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("12"))
-	tabActive = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("12")).Padding(0, 1)
+	tabActive = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Underline(true).Padding(0, 1)
 	tabIdle   = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Padding(0, 1)
 )
 
 func (m Model) View() string {
 	var b strings.Builder
 
-	t1s, t2s := tabIdle, tabIdle
 	if m.view == viewChats {
-		t1s = tabActive
+		b.WriteString(tabActive.Render("▸ Chats"))
+		b.WriteString(tabIdle.Render("  Projects"))
 	} else {
-		t2s = tabActive
+		b.WriteString(tabIdle.Render("  Chats"))
+		b.WriteString(tabActive.Render("▸ Projects"))
 	}
-	b.WriteString(t1s.Render("1 Chats"))
-	b.WriteString(t2s.Render("2 Projects"))
+	b.WriteString("   ")
+	b.WriteString(m.stateIndicators())
 	b.WriteString("\n\n")
 
-	if m.filtering || m.filter != "" {
-		caret := ""
-		if m.filtering {
-			caret = "█"
-		}
-		b.WriteString(dimStyle.Render("/ ") + m.filter + caret + "\n\n")
-	}
-
-	listH := m.height - 6
+	listH := m.height - 4
 	if listH < 5 {
 		listH = 5
 	}
@@ -308,14 +291,37 @@ func (m Model) View() string {
 		b.WriteString(m.renderProjectList(m.sortedProjects(), listH))
 	}
 
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render(m.footerKeys()))
+	return b.String()
+}
+
+func (m Model) stateIndicators() string {
+	var parts []string
+
 	sortLabel := "recent"
 	if m.sort == sortName {
 		sortLabel = "name"
 	}
+	parts = append(parts, "sort:"+sortLabel)
 
-	b.WriteString("\n")
-	b.WriteString(dimStyle.Render(m.footerKeys() + "   sort:" + sortLabel))
-	return b.String()
+	if m.view == viewChats {
+		preview := "you"
+		if m.showAssistant {
+			preview = "claude"
+		}
+		parts = append(parts, "preview:"+preview)
+	}
+
+	if m.filter != "" || m.filtering {
+		caret := ""
+		if m.filtering {
+			caret = "█"
+		}
+		parts = append(parts, "/"+m.filter+caret)
+	}
+
+	return dimStyle.Render(strings.Join(parts, "   "))
 }
 
 func (m Model) renderSessionList(list []*sessions.Session, h int) string {
@@ -374,15 +380,14 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 }
 
 func (m Model) footerKeys() string {
-	previewMode := "you"
-	if m.showAssistant {
-		previewMode = "claude"
+	if m.filtering {
+		return "↵  apply   esc  clear"
 	}
 	switch m.view {
 	case viewChats:
-		return fmt.Sprintf("↵ cd+resume   c cd   r cd+claude   tab switch   s sort   p preview:%s   / filter   q quit", previewMode)
+		return "↵  cd+resume   shift+↵  cd   c cd   ← → tab   s sort   p preview   / filter   q quit"
 	case viewProjects:
-		return "↵ cd+claude   c cd   r cd+claude   tab switch   s sort   / filter   q quit"
+		return "↵  cd+claude   shift+↵  cd   c cd   ← → tab   s sort   / filter   q quit"
 	}
 	return ""
 }

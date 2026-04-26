@@ -30,11 +30,11 @@ That builds `$GOPATH/bin/cnav-bin` and appends a one-line `eval "$(cnav-bin init
 | `j`/`k`, `↑`/`↓`       | move cursor                                         |
 | `enter` (Chats)         | cd + resume that chat                               |
 | `enter` (Projects)      | cd + launch fresh `claude`                          |
+| `shift+enter`           | cd only                                             |
 | `c`                     | cd only                                             |
-| `r`                     | cd + start fresh `claude`                           |
 | `s`                     | toggle sort: recent / name                          |
 | `p`                     | toggle preview: your last message / Claude's reply  |
-| `/`                     | filter                                              |
+| `/`                     | filter (hotkey bar updates to show only active keys)|
 | `q` / `esc`             | quit                                                |
 
 ## Layout
@@ -50,3 +50,5 @@ That builds `$GOPATH/bin/cnav-bin` and appends a one-line `eval "$(cnav-bin init
 - The session list is built fresh on every launch (no cache). Scanning is parallel; on a few hundred sessions it's instant.
 - A session's project path comes from the first `cwd` field in its jsonl (the slug-encoded directory name isn't reversible if a path component contains `-`).
 - The preview column shows your last message by default; press `p` to switch to Claude's last reply. `/clear` is skipped when determining the last user message.
+- Worktree sessions are hidden if the worktree directory no longer exists on disk.
+- Active state (sort order, preview mode, filter text) is shown inline in the header next to the tab indicator.
