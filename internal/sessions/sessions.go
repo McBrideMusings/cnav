@@ -41,8 +41,14 @@ const (
 )
 
 var (
-	xmlBlockRe = regexp.MustCompile(`(?s)<(` + sysTagRe + `)[^>]*>.*?</\1>`)
-	xmlTagRe   = regexp.MustCompile(`</?(?:` + sysTagRe + `)[^>]*>`)
+	xmlBlockRes = []*regexp.Regexp{
+		regexp.MustCompile(`(?s)<local-command-caveat[^>]*>.*?</local-command-caveat>`),
+		regexp.MustCompile(`(?s)<command-message[^>]*>.*?</command-message>`),
+		regexp.MustCompile(`(?s)<command-name[^>]*>.*?</command-name>`),
+		regexp.MustCompile(`(?s)<command-args[^>]*>.*?</command-args>`),
+		regexp.MustCompile(`(?s)<system-reminder[^>]*>.*?</system-reminder>`),
+	}
+	xmlTagRe = regexp.MustCompile(`</?(?:` + sysTagRe + `)[^>]*>`)
 )
 
 type scanState struct {
@@ -298,7 +304,9 @@ func isSkippableCommand(s string) bool {
 }
 
 func stripTags(s string) string {
-	s = xmlBlockRe.ReplaceAllString(s, " ")
+	for _, re := range xmlBlockRes {
+		s = re.ReplaceAllString(s, " ")
+	}
 	s = xmlTagRe.ReplaceAllString(s, "")
 	return strings.TrimSpace(s)
 }
