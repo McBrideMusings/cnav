@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,22 +19,27 @@ type viewID int
 const (
 	viewChats viewID = iota
 	viewProjects
-	viewProjectChats // chats filtered to one project
+)
+
+type sortOrder int
+
+const (
+	sortRecent sortOrder = iota
+	sortName
 )
 
 type Model struct {
 	sessions []*sessions.Session
 	projects []*sessions.Project
 
-	view         viewID
-	cursor       int
-	filter       string
-	filtering    bool
-	width        int
-	height       int
-	focusProject *sessions.Project // when in viewProjectChats
+	view      viewID
+	cursor    int
+	filter    string
+	filtering bool
+	sort      sortOrder
+	width     int
+	height    int
 
-	// Result, set when user picks an action.
 	Action shell.Action
 	Done   bool
 }
@@ -54,7 +60,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
-
 	case tea.KeyMsg:
 		if m.filtering {
 			return m.updateFilter(msg)
@@ -87,19 +92,24 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c", "esc":
-		if m.view == viewProjectChats {
-			m.view = viewProjects
-			m.cursor = 0
-			return m, nil
-		}
 		m.Done = true
 		return m, tea.Quit
-	case "tab", "1":
+	case "tab", "left", "right":
+		if m.view == viewChats {
+			m.view = viewProjects
+		} else {
+			m.view = viewChats
+		}
+		m.cursor = 0
+		m.sort = sortRecent
+	case "1":
 		m.view = viewChats
 		m.cursor = 0
+		m.sort = sortRecent
 	case "2":
 		m.view = viewProjects
 		m.cursor = 0
+		m.sort = sortRecent
 	case "j", "down":
 		if m.cursor < m.maxCursor() {
 			m.cursor++
@@ -112,131 +122,117 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 	case "G":
 		m.cursor = m.maxCursor()
+	case "s":
+		if m.sort == sortRecent {
+			m.sort = sortName
+		} else {
+			m.sort = sortRecent
+		}
+		m.cursor = 0
 	case "/":
 		m.filtering = true
 		m.filter = ""
 	case "enter":
-		return m.activate(actionDefault)
+		return m.activate()
 	case "c":
-		return m.activate(actionCDOnly)
+		return m.activateCD()
 	case "r":
-		return m.activate(actionNewClaude)
-	case "l":
-		return m.activate(actionDrillIn)
-	case "right":
-		switch m.view {
-		case viewChats:
-			m.view = viewProjects
-			m.cursor = 0
-		case viewProjects:
-			if len(m.filteredProjects()) > 0 {
-				return m.activate(actionDrillIn)
-			}
-		}
-	case "left":
-		switch m.view {
-		case viewProjects:
-			m.view = viewChats
-			m.cursor = 0
-		case viewProjectChats:
-			m.view = viewProjects
-			m.cursor = 0
-			m.focusProject = nil
-		}
+		return m.activateNewClaude()
 	}
 	return m, nil
 }
 
-type actionKind int
-
-const (
-	actionDefault actionKind = iota
-	actionCDOnly
-	actionNewClaude
-	actionDrillIn
-)
-
-func (m Model) activate(kind actionKind) (tea.Model, tea.Cmd) {
+func (m Model) selectedDir() (string, string) {
 	switch m.view {
 	case viewChats:
-		list := m.filteredSessions()
+		list := m.sortedSessions()
 		if len(list) == 0 {
-			return m, nil
+			return "", ""
 		}
 		s := list[m.cursor]
-		switch kind {
-		case actionDefault:
-			m.Action = shell.Action{Dir: s.CWD, Resume: s.ID}
-		case actionCDOnly:
-			m.Action = shell.Action{Dir: s.CWD}
-		case actionNewClaude:
-			m.Action = shell.Action{Dir: s.CWD, NewClaude: true}
-		}
-		m.Done = true
-		return m, tea.Quit
-
+		return s.CWD, s.ID
 	case viewProjects:
-		list := m.filteredProjects()
+		list := m.sortedProjects()
 		if len(list) == 0 {
-			return m, nil
+			return "", ""
 		}
-		p := list[m.cursor]
-		switch kind {
-		case actionDefault, actionCDOnly:
-			m.Action = shell.Action{Dir: p.CWD}
-			m.Done = true
-			return m, tea.Quit
-		case actionNewClaude:
-			m.Action = shell.Action{Dir: p.CWD, NewClaude: true}
-			m.Done = true
-			return m, tea.Quit
-		case actionDrillIn:
-			m.focusProject = p
-			m.view = viewProjectChats
-			m.cursor = 0
-		}
-
-	case viewProjectChats:
-		if m.focusProject == nil {
-			m.view = viewProjects
-			m.cursor = 0
-			return m, nil
-		}
-		list := m.focusProject.Sessions
-		if len(list) == 0 {
-			return m, nil
-		}
-		s := list[m.cursor]
-		switch kind {
-		case actionDefault:
-			m.Action = shell.Action{Dir: s.CWD, Resume: s.ID}
-		case actionCDOnly:
-			m.Action = shell.Action{Dir: s.CWD}
-		case actionNewClaude:
-			m.Action = shell.Action{Dir: s.CWD, NewClaude: true}
-		}
-		m.Done = true
-		return m, tea.Quit
+		return list[m.cursor].CWD, ""
 	}
-	return m, nil
+	return "", ""
+}
+
+func (m Model) activate() (tea.Model, tea.Cmd) {
+	dir, id := m.selectedDir()
+	if dir == "" {
+		return m, nil
+	}
+	if id != "" {
+		m.Action = shell.Action{Dir: dir, Resume: id}
+	} else {
+		m.Action = shell.Action{Dir: dir, NewClaude: true}
+	}
+	m.Done = true
+	return m, tea.Quit
+}
+
+func (m Model) activateCD() (tea.Model, tea.Cmd) {
+	dir, _ := m.selectedDir()
+	if dir == "" {
+		return m, nil
+	}
+	m.Action = shell.Action{Dir: dir}
+	m.Done = true
+	return m, tea.Quit
+}
+
+func (m Model) activateNewClaude() (tea.Model, tea.Cmd) {
+	dir, _ := m.selectedDir()
+	if dir == "" {
+		return m, nil
+	}
+	m.Action = shell.Action{Dir: dir, NewClaude: true}
+	m.Done = true
+	return m, tea.Quit
 }
 
 func (m Model) maxCursor() int {
 	var n int
 	switch m.view {
 	case viewChats:
-		n = len(m.filteredSessions())
+		n = len(m.sortedSessions())
 	case viewProjects:
-		n = len(m.filteredProjects())
-	case viewProjectChats:
-		if m.focusProject != nil {
-			n = len(m.focusProject.Sessions)
-		}
+		n = len(m.sortedProjects())
 	}
 	if n == 0 {
 		return 0
 	}
 	return n - 1
+}
+
+func (m Model) sortedSessions() []*sessions.Session {
+	list := m.filteredSessions()
+	if m.sort == sortName {
+		out := make([]*sessions.Session, len(list))
+		copy(out, list)
+		sort.Slice(out, func(i, j int) bool {
+			return filepath.Base(out[i].CWD) < filepath.Base(out[j].CWD)
+		})
+		return out
+	}
+	return list
+}
+
+func (m Model) sortedProjects() []*sessions.Project {
+	list := m.filteredProjects()
+	if m.sort == sortName {
+		out := make([]*sessions.Project, len(list))
+		copy(out, list)
+		sort.Slice(out, func(i, j int) bool {
+			return filepath.Base(out[i].CWD) < filepath.Base(out[j].CWD)
+		})
+		return out
+	}
+	return list
 }
 
 func (m Model) filteredSessions() []*sessions.Session {
@@ -271,32 +267,25 @@ func (m Model) filteredProjects() []*sessions.Project {
 // ---------- view ----------
 
 var (
-	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	hiStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("12"))
-	tabActive   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("12")).Padding(0, 1)
-	tabIdle     = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Padding(0, 1)
+	dimStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	hiStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("12"))
+	tabActive = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("12")).Padding(0, 1)
+	tabIdle   = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Padding(0, 1)
 )
 
 func (m Model) View() string {
 	var b strings.Builder
 
-	// Tabs.
-	t1 := "1 Chats"
-	t2 := "2 Projects"
-	style1 := tabActive
-	style2 := tabIdle
-	if m.view == viewProjects {
-		style1, style2 = style2, style1
+	t1s, t2s := tabIdle, tabIdle
+	if m.view == viewChats {
+		t1s = tabActive
+	} else {
+		t2s = tabActive
 	}
-	b.WriteString(style1.Render(t1))
-	b.WriteString(style2.Render(t2))
-	if m.view == viewProjectChats && m.focusProject != nil {
-		b.WriteString(tabActive.Render("→ " + filepath.Base(m.focusProject.CWD)))
-	}
+	b.WriteString(t1s.Render("1 Chats"))
+	b.WriteString(t2s.Render("2 Projects"))
 	b.WriteString("\n\n")
 
-	// Filter bar.
 	if m.filtering || m.filter != "" {
 		caret := ""
 		if m.filtering {
@@ -305,29 +294,28 @@ func (m Model) View() string {
 		b.WriteString(dimStyle.Render("/ ") + m.filter + caret + "\n\n")
 	}
 
-	// Body.
 	listH := m.height - 6
 	if listH < 5 {
 		listH = 5
 	}
 	switch m.view {
 	case viewChats:
-		b.WriteString(m.renderSessionList(m.filteredSessions(), listH, true))
+		b.WriteString(m.renderSessionList(m.sortedSessions(), listH))
 	case viewProjects:
-		b.WriteString(m.renderProjectList(m.filteredProjects(), listH))
-	case viewProjectChats:
-		if m.focusProject != nil {
-			b.WriteString(m.renderSessionList(m.focusProject.Sessions, listH, false))
-		}
+		b.WriteString(m.renderProjectList(m.sortedProjects(), listH))
 	}
 
-	// Footer.
+	sortLabel := "recent"
+	if m.sort == sortName {
+		sortLabel = "name"
+	}
+
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render(m.footerKeys()))
+	b.WriteString(dimStyle.Render(m.footerKeys() + "   sort:" + sortLabel))
 	return b.String()
 }
 
-func (m Model) renderSessionList(list []*sessions.Session, h int, showProject bool) string {
+func (m Model) renderSessionList(list []*sessions.Session, h int) string {
 	if len(list) == 0 {
 		return dimStyle.Render("  no sessions")
 	}
@@ -341,12 +329,7 @@ func (m Model) renderSessionList(list []*sessions.Session, h int, showProject bo
 		if preview == "" {
 			preview = dimStyle.Render("(no user message)")
 		}
-		var line string
-		if showProject {
-			line = fmt.Sprintf("%-10s  %-22s  %s", ago, truncRunes(proj, 22), truncRunes(preview, m.width-40))
-		} else {
-			line = fmt.Sprintf("%-10s  %s", ago, truncRunes(preview, m.width-14))
-		}
+		line := fmt.Sprintf("%-10s  %-22s  %s", ago, truncRunes(proj, 22), truncRunes(preview, m.width-40))
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
 		} else {
@@ -381,11 +364,9 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 func (m Model) footerKeys() string {
 	switch m.view {
 	case viewChats:
-		return "↵ cd+resume   c cd   r cd+claude   →/tab/1/2 switch view   / filter   q quit"
-	case viewProjectChats:
-		return "↵ cd+resume   c cd   r cd+claude   ← back   / filter   q quit"
+		return "↵ cd+resume   c cd   r cd+claude   tab switch   s sort   / filter   q quit"
 	case viewProjects:
-		return "↵ cd   →/l list chats   r cd+claude   ←/tab/1/2 switch view   / filter   q quit"
+		return "↵ cd+claude   c cd   r cd+claude   tab switch   s sort   / filter   q quit"
 	}
 	return ""
 }
