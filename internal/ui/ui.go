@@ -32,13 +32,14 @@ type Model struct {
 	sessions []*sessions.Session
 	projects []*sessions.Project
 
-	view      viewID
-	cursor    int
-	filter    string
-	filtering bool
-	sort      sortOrder
-	width     int
-	height    int
+	view          viewID
+	cursor        int
+	filter        string
+	filtering     bool
+	sort          sortOrder
+	showAssistant bool
+	width         int
+	height        int
 
 	Action shell.Action
 	Done   bool
@@ -129,6 +130,8 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.sort = sortRecent
 		}
 		m.cursor = 0
+	case "p":
+		m.showAssistant = !m.showAssistant
 	case "/":
 		m.filtering = true
 		m.filter = ""
@@ -325,9 +328,17 @@ func (m Model) renderSessionList(list []*sessions.Session, h int) string {
 		s := list[i]
 		ago := humanAgo(s.Started)
 		proj := projectLabel(s.CWD)
-		preview := s.Preview
-		if preview == "" {
-			preview = dimStyle.Render("(no user message)")
+		var preview string
+		if m.showAssistant {
+			preview = s.AssistantPreview
+			if preview == "" {
+				preview = dimStyle.Render("(no assistant message)")
+			}
+		} else {
+			preview = s.Preview
+			if preview == "" {
+				preview = dimStyle.Render("(no user message)")
+			}
 		}
 		line := fmt.Sprintf("%-10s  %-22s  %s", ago, truncRunes(proj, 22), truncRunes(preview, m.width-40))
 		if i == m.cursor {
@@ -363,9 +374,13 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 }
 
 func (m Model) footerKeys() string {
+	previewMode := "you"
+	if m.showAssistant {
+		previewMode = "claude"
+	}
 	switch m.view {
 	case viewChats:
-		return "↵ cd+resume   c cd   r cd+claude   tab switch   s sort   / filter   q quit"
+		return fmt.Sprintf("↵ cd+resume   c cd   r cd+claude   tab switch   s sort   p preview:%s   / filter   q quit", previewMode)
 	case viewProjects:
 		return "↵ cd+claude   c cd   r cd+claude   tab switch   s sort   / filter   q quit"
 	}

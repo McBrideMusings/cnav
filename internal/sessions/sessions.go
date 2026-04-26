@@ -14,12 +14,13 @@ import (
 
 // Session is one Claude Code session (one .jsonl file).
 type Session struct {
-	ID       string    // sessionId
-	CWD      string    // project dir claude ran in
-	File     string    // absolute path to jsonl
-	ModTime  time.Time // file mtime
-	Started  time.Time // first user-message timestamp (fallback: ModTime)
-	Preview  string    // first user message text, truncated
+	ID              string    // sessionId
+	CWD             string    // project dir claude ran in
+	File            string    // absolute path to jsonl
+	ModTime         time.Time // file mtime
+	Started          time.Time // first user-message timestamp (fallback: ModTime)
+	Preview          string    // last non-skippable user message, truncated
+	AssistantPreview string    // last assistant text block, truncated
 }
 
 // Project groups sessions by CWD.
@@ -117,6 +118,8 @@ func parseSession(path string) (*Session, error) {
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
+	var lastPreview, lastAssistantPreview string
+	var seenFirstUser bool
 	for sc.Scan() {
 		var l line
 		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
@@ -128,21 +131,32 @@ func parseSession(path string) (*Session, error) {
 		if s.CWD == "" && l.CWD != "" {
 			s.CWD = l.CWD
 		}
-		if l.Type == "user" && len(l.Message) > 0 && s.Preview == "" {
+		if len(l.Message) > 0 {
 			var um userMsg
-			if err := json.Unmarshal(l.Message, &um); err == nil && um.Role == "user" {
-				s.Preview = extractText(um.Content)
-				if l.Timestamp != "" {
-					if t, err := time.Parse(time.RFC3339Nano, l.Timestamp); err == nil {
-						s.Started = t
+			if err := json.Unmarshal(l.Message, &um); err == nil {
+				switch um.Role {
+				case "user":
+					if !seenFirstUser {
+						seenFirstUser = true
+						if l.Timestamp != "" {
+							if t, err := time.Parse(time.RFC3339Nano, l.Timestamp); err == nil {
+								s.Started = t
+							}
+						}
+					}
+					if text := extractText(um.Content); text != "" && !isSkippableCommand(text) {
+						lastPreview = text
+					}
+				case "assistant":
+					if text := extractAssistantText(um.Content); text != "" {
+						lastAssistantPreview = text
 					}
 				}
 			}
 		}
-		if s.ID != "" && s.CWD != "" && s.Preview != "" {
-			break
-		}
 	}
+	s.Preview = lastPreview
+	s.AssistantPreview = lastAssistantPreview
 
 	if s.ID == "" {
 		// Fall back to filename stem.
@@ -157,6 +171,24 @@ func parseSession(path string) (*Session, error) {
 		}
 	}
 	return s, nil
+}
+
+// extractAssistantText pulls the first text block from an assistant content array,
+// skipping thinking blocks.
+func extractAssistantText(raw json.RawMessage) string {
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return ""
+	}
+	for _, b := range blocks {
+		if b.Type == "text" && b.Text != "" {
+			return truncate(strings.TrimSpace(b.Text), previewMax)
+		}
+	}
+	return ""
 }
 
 // extractText pulls human-readable text out of a user message Content field,
@@ -178,6 +210,10 @@ func extractText(raw json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+func isSkippableCommand(s string) bool {
+	return s == "/clear"
 }
 
 func truncate(s string, n int) string {
