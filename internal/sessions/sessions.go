@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Session is one Claude Code session (one .jsonl file).
@@ -267,7 +268,7 @@ func extractAssistantText(raw json.RawMessage) string {
 	}
 	var best string
 	for _, b := range blocks {
-		if b.Type == "text" && len(b.Text) > len(best) {
+		if b.Type == "text" && utf8.RuneCountInString(b.Text) > utf8.RuneCountInString(best) {
 			best = b.Text
 		}
 	}
