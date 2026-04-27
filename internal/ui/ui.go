@@ -417,8 +417,7 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 	for i := start; i < end; i++ {
 		p := list[i]
 		ago := humanAgo(p.LastActivity)
-		count := fmt.Sprintf("%d session%s", len(p.Sessions), plural(len(p.Sessions)))
-		labelWidth := max(10, min(30, (m.width-34)/5))
+		labelWidth := max(10, min(40, (m.width-20)/4))
 		projLabel := projectLabel(p.CWD)
 		label := truncRunes(projLabel, labelWidth)
 		if isWorktree(p.CWD) {
@@ -443,8 +442,8 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 		} else {
 			previewText = dimStyle.Render("(no sessions)")
 		}
-		previewWidth := max(1, m.width-34-labelWidth)
-		line := fmt.Sprintf("%-10s  %-12s  %-*s  %s%s", ago, count, labelWidth, label, indicator, truncRunes(previewText, previewWidth))
+		previewWidth := max(1, m.width-20-labelWidth)
+		line := fmt.Sprintf("%-10s  %-*s  %s%s", ago, labelWidth, label, indicator, truncRunes(previewText, previewWidth))
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
 		} else {
@@ -477,18 +476,11 @@ func isWorktree(cwd string) bool {
 	return found
 }
 
-func abbreviateHome(p string) string {
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
-		return "~" + p[len(home):]
-	}
-	return p
-}
-
 func projectLabel(cwd string) string {
 	if before, after, ok := strings.Cut(cwd, wtSep); ok {
-		return abbreviateHome(before) + " → " + after
+		return filepath.Base(before) + " → " + after
 	}
-	return abbreviateHome(cwd)
+	return filepath.Base(cwd)
 }
 
 func chatLabel(cwd string, n int) string {
