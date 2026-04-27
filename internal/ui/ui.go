@@ -238,7 +238,15 @@ func (m Model) filteredProjects() []*sessions.Project {
 	q := strings.ToLower(m.filter)
 	var out []*sessions.Project
 	for _, p := range m.projects {
-		if containsCI(p.CWD, q) || containsCI(projectLabel(p.CWD), q) {
+		previewMatch := false
+		if len(p.Sessions) > 0 {
+			s := p.Sessions[0]
+			previewMatch = containsCI(s.Preview, q)
+			if m.showAssistant {
+				previewMatch = previewMatch || containsCI(s.AssistantPreview, q)
+			}
+		}
+		if containsCI(p.CWD, q) || containsCI(projectLabel(p.CWD), q) || previewMatch {
 			out = append(out, p)
 		}
 	}
@@ -367,7 +375,7 @@ func (m Model) renderSessionList(list []*sessions.Session, h int) string {
 				preview = dimStyle.Render("(no user message)")
 			}
 		}
-		line := fmt.Sprintf("%-10s  %-22s  %s%s", ago, chatLabel(s.CWD, 22), indicator, truncRunes(preview, m.width-42))
+		line := fmt.Sprintf("%-10s  %-22s  %s%s", ago, chatLabel(s.CWD, 22), indicator, truncRunes(preview, max(1, m.width-42)))
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
 		} else {
@@ -388,9 +396,11 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 		p := list[i]
 		ago := humanAgo(p.LastActivity)
 		count := fmt.Sprintf("%d session%s", len(p.Sessions), plural(len(p.Sessions)))
-		label := truncRunes(projectLabel(p.CWD), 16)
+		labelWidth := max(10, min(30, (m.width-34)/5))
+		projLabel := projectLabel(p.CWD)
+		label := truncRunes(projLabel, labelWidth)
 		if isWorktree(p.CWD) {
-			label = "⎇ " + truncRunes(projectLabel(p.CWD), 14)
+			label = "⎇ " + truncRunes(projLabel, labelWidth-2)
 		}
 		indicator := dimStyle.Render("you ")
 		var previewText string
@@ -411,7 +421,8 @@ func (m Model) renderProjectList(list []*sessions.Project, h int) string {
 		} else {
 			previewText = dimStyle.Render("(no sessions)")
 		}
-		line := fmt.Sprintf("%-10s  %-12s  %-16s  %s%s", ago, count, label, indicator, truncRunes(previewText, m.width-50))
+		previewWidth := max(1, m.width-34-labelWidth)
+		line := fmt.Sprintf("%-10s  %-12s  %-*s  %s%s", ago, count, labelWidth, label, indicator, truncRunes(previewText, previewWidth))
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
 		} else {
