@@ -138,11 +138,11 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		m.filtering = true
 		m.filter = ""
+	case "R":
+		return m.activateResumeLatest()
 	case "enter":
 		return m.activate()
 	case "shift+enter":
-		return m.activateCD()
-	case "c":
 		return m.activateCD()
 	}
 	return m, nil
@@ -187,6 +187,23 @@ func (m Model) activateCD() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.Action = shell.Action{Dir: dir}
+	m.Done = true
+	return m, tea.Quit
+}
+
+func (m Model) activateResumeLatest() (tea.Model, tea.Cmd) {
+	if m.view != viewProjects {
+		return m, nil
+	}
+	list := m.sortedProjects()
+	if len(list) == 0 {
+		return m, nil
+	}
+	p := list[m.cursor]
+	if len(p.Sessions) == 0 {
+		return m.activate()
+	}
+	m.Action = shell.Action{Dir: p.CWD, Resume: p.Sessions[0].ID}
 	m.Done = true
 	return m, tea.Quit
 }
@@ -356,6 +373,10 @@ func (m Model) renderSessionList(list []*sessions.Session, h int) string {
 	if len(list) == 0 {
 		return dimStyle.Render("  no sessions")
 	}
+	cwdCount := make(map[string]int, len(m.projects))
+	for _, p := range m.projects {
+		cwdCount[p.CWD] = len(p.Sessions)
+	}
 	start, end := windowAround(m.cursor, len(list), h)
 	var b strings.Builder
 	for i := start; i < end; i++ {
@@ -375,7 +396,8 @@ func (m Model) renderSessionList(list []*sessions.Session, h int) string {
 				preview = dimStyle.Render("(no user message)")
 			}
 		}
-		line := fmt.Sprintf("%-10s  %-22s  %s%s", ago, chatLabel(s.CWD, 22), indicator, truncRunes(preview, max(1, m.width-42)))
+		cnt := dimStyle.Render(fmt.Sprintf("%2d", min(99, cwdCount[s.CWD])))
+		line := fmt.Sprintf("%-10s  %-22s  %s  %s%s", ago, chatLabel(s.CWD, 22), cnt, indicator, truncRunes(preview, max(1, m.width-47)))
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
 		} else {
@@ -439,9 +461,9 @@ func (m Model) footerKeys() string {
 	}
 	switch m.view {
 	case viewChats:
-		return "↵  cd+resume   shift+↵  cd   c cd   ← → tab   s sort   p preview   / filter   q quit"
+		return "↵  cd+resume   shift+↵  cd   g/G top/btm   ← → tab   s sort   p preview   / filter   q quit"
 	case viewProjects:
-		return "↵  cd+claude   shift+↵  cd   c cd   ← → tab   s sort   p preview   / filter   q quit"
+		return "↵  cd+claude   R resume   shift+↵  cd   g/G top/btm   ← → tab   s sort   p preview   / filter   q quit"
 	}
 	return ""
 }
@@ -455,11 +477,18 @@ func isWorktree(cwd string) bool {
 	return found
 }
 
+func abbreviateHome(p string) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
+		return "~" + p[len(home):]
+	}
+	return p
+}
+
 func projectLabel(cwd string) string {
 	if before, after, ok := strings.Cut(cwd, wtSep); ok {
-		return filepath.Base(before) + " → " + after
+		return abbreviateHome(before) + " → " + after
 	}
-	return filepath.Base(cwd)
+	return abbreviateHome(cwd)
 }
 
 func chatLabel(cwd string, n int) string {

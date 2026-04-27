@@ -30,8 +30,9 @@ That builds `$GOPATH/bin/cnav-bin` and appends a one-line `eval "$(cnav-bin init
 | `j`/`k`, `↑`/`↓`       | move cursor                                         |
 | `enter` (Chats)         | cd + resume that chat                               |
 | `enter` (Projects)      | cd + launch fresh `claude`                          |
+| `R` (Projects)          | cd + resume most recent session for that project    |
 | `shift+enter`           | cd only                                             |
-| `c`                     | cd only                                             |
+| `g` / `G`               | jump to top / bottom of list                        |
 | `s`                     | toggle sort: recent / name                          |
 | `p`                     | toggle preview: your last message / Claude's reply  |
 | `/`                     | filter (hotkey bar updates to show only active keys)|
