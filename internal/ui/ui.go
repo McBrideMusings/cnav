@@ -15,13 +15,6 @@ import (
 	"github.com/pierce/cnav/internal/shell"
 )
 
-type viewID int
-
-const (
-	viewChats viewID = iota
-	viewProjects
-)
-
 type sortOrder int
 
 const (
@@ -33,8 +26,8 @@ type Model struct {
 	sessions []*sessions.Session
 	projects []*sessions.Project
 
-	view                viewID
 	cursor              int
+	expanded            map[string]bool
 	filter              string
 	filtering           bool
 	sort                sortOrder
@@ -47,11 +40,20 @@ type Model struct {
 	Done   bool
 }
 
+// row is one visible line in the unified list.
+// session == nil means the row is a project header.
+type row struct {
+	project *sessions.Project
+	session *sessions.Session
+}
+
+func (r row) isProject() bool { return r.session == nil }
+
 func New(ss []*sessions.Session, hiddenWorktreeCount int) Model {
 	return Model{
 		sessions:            ss,
 		projects:            sessions.GroupByProject(ss),
-		view:                viewChats,
+		expanded:            map[string]bool{},
 		hiddenWorktreeCount: hiddenWorktreeCount,
 	}
 }
@@ -98,22 +100,6 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c", "esc":
 		m.Done = true
 		return m, tea.Quit
-	case "tab", "left", "right":
-		if m.view == viewChats {
-			m.view = viewProjects
-		} else {
-			m.view = viewChats
-		}
-		m.cursor = 0
-		m.sort = sortRecent
-	case "1":
-		m.view = viewChats
-		m.cursor = 0
-		m.sort = sortRecent
-	case "2":
-		m.view = viewProjects
-		m.cursor = 0
-		m.sort = sortRecent
 	case "j", "down":
 		if m.cursor < m.maxCursor() {
 			m.cursor++
@@ -138,6 +124,12 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		m.filtering = true
 		m.filter = ""
+	case " ", "space":
+		return m.toggleExpand(), nil
+	case "right", "l":
+		return m.expandOrDescend(), nil
+	case "left", "h":
+		return m.collapseOrAscend(), nil
 	case "R":
 		return m.activateResumeLatest()
 	case "enter":
@@ -148,43 +140,96 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) selectedDir() (string, string) {
-	switch m.view {
-	case viewChats:
-		list := m.sortedSessions()
-		if len(list) == 0 {
-			return "", ""
-		}
-		s := list[m.cursor]
-		return s.CWD, s.ID
-	case viewProjects:
-		list := m.sortedProjects()
-		if len(list) == 0 {
-			return "", ""
-		}
-		return list[m.cursor].CWD, ""
+// toggleExpand flips expansion on the project owning the current row.
+func (m Model) toggleExpand() Model {
+	r, ok := m.selectedRow()
+	if !ok {
+		return m
 	}
-	return "", ""
+	cwd := r.project.CWD
+	if m.expanded[cwd] {
+		delete(m.expanded, cwd)
+		// If cursor was on a child of this project, move it to the project row.
+		if !r.isProject() {
+			m.cursor = m.projectRowIndex(cwd)
+		}
+	} else {
+		m.expanded[cwd] = true
+	}
+	return m
+}
+
+// expandOrDescend: on a collapsed project row, expand. On an already-expanded
+// project row, move cursor to first child. On a chat row, no-op.
+func (m Model) expandOrDescend() Model {
+	r, ok := m.selectedRow()
+	if !ok || !r.isProject() {
+		return m
+	}
+	if !m.expanded[r.project.CWD] {
+		m.expanded[r.project.CWD] = true
+		return m
+	}
+	if m.cursor < m.maxCursor() {
+		m.cursor++
+	}
+	return m
+}
+
+// collapseOrAscend: on an expanded project row, collapse. On a chat row, jump
+// to parent project and collapse it.
+func (m Model) collapseOrAscend() Model {
+	r, ok := m.selectedRow()
+	if !ok {
+		return m
+	}
+	cwd := r.project.CWD
+	if !r.isProject() {
+		m.cursor = m.projectRowIndex(cwd)
+	}
+	delete(m.expanded, cwd)
+	return m
+}
+
+func (m Model) projectRowIndex(cwd string) int {
+	for i, r := range m.visibleRows() {
+		if r.isProject() && r.project.CWD == cwd {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m Model) selectedRow() (row, bool) {
+	rows := m.visibleRows()
+	if len(rows) == 0 || m.cursor >= len(rows) {
+		return row{}, false
+	}
+	return rows[m.cursor], true
 }
 
 func (m Model) activate() (tea.Model, tea.Cmd) {
-	dir, id := m.selectedDir()
-	if dir == "" {
+	r, ok := m.selectedRow()
+	if !ok {
 		return m, nil
 	}
-	if id != "" {
-		m.Action = shell.Action{Dir: dir, Resume: id}
+	if r.isProject() {
+		m.Action = shell.Action{Dir: r.project.CWD, NewClaude: true}
 	} else {
-		m.Action = shell.Action{Dir: dir, NewClaude: true}
+		m.Action = shell.Action{Dir: r.session.CWD, Resume: r.session.ID}
 	}
 	m.Done = true
 	return m, tea.Quit
 }
 
 func (m Model) activateCD() (tea.Model, tea.Cmd) {
-	dir, _ := m.selectedDir()
-	if dir == "" {
+	r, ok := m.selectedRow()
+	if !ok {
 		return m, nil
+	}
+	dir := r.project.CWD
+	if !r.isProject() {
+		dir = r.session.CWD
 	}
 	m.Action = shell.Action{Dir: dir}
 	m.Done = true
@@ -192,100 +237,87 @@ func (m Model) activateCD() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) activateResumeLatest() (tea.Model, tea.Cmd) {
-	if m.view != viewProjects {
+	r, ok := m.selectedRow()
+	if !ok {
 		return m, nil
 	}
-	list := m.sortedProjects()
-	if len(list) == 0 {
-		return m, nil
+	if !r.isProject() {
+		// On a chat row, R is equivalent to enter — resume this chat.
+		m.Action = shell.Action{Dir: r.session.CWD, Resume: r.session.ID}
+		m.Done = true
+		return m, tea.Quit
 	}
-	p := list[m.cursor]
-	if len(p.Sessions) == 0 {
+	if len(r.project.Sessions) == 0 {
 		return m.activate()
 	}
-	m.Action = shell.Action{Dir: p.CWD, Resume: p.Sessions[0].ID}
+	m.Action = shell.Action{Dir: r.project.CWD, Resume: r.project.Sessions[0].ID}
 	m.Done = true
 	return m, tea.Quit
 }
 
 func (m Model) maxCursor() int {
-	var n int
-	switch m.view {
-	case viewChats:
-		n = len(m.sortedSessions())
-	case viewProjects:
-		n = len(m.sortedProjects())
-	}
+	n := len(m.visibleRows())
 	if n == 0 {
 		return 0
 	}
 	return n - 1
 }
 
-func (m Model) sortedSessions() []*sessions.Session {
-	list := m.filteredSessions()
-	if m.sort == sortName {
-		out := make([]*sessions.Session, len(list))
-		copy(out, list)
-		sort.Slice(out, func(i, j int) bool {
-			return projectLabel(out[i].CWD) < projectLabel(out[j].CWD)
-		})
-		return out
-	}
-	return list
-}
-
-func (m Model) sortedProjects() []*sessions.Project {
-	list := m.filteredProjects()
-	if m.sort == sortName {
-		out := make([]*sessions.Project, len(list))
-		copy(out, list)
-		sort.Slice(out, func(i, j int) bool {
-			return projectLabel(out[i].CWD) < projectLabel(out[j].CWD)
-		})
-		return out
-	}
-	return list
-}
-
-func (m Model) filteredProjects() []*sessions.Project {
+// filteredProjects narrows projects by the active filter. When a project name
+// doesn't match but some of its sessions do, only those matching sessions are
+// returned and the project is marked auto-expanded.
+func (m Model) filteredProjects() (projs []*sessions.Project, sessionOverride map[string][]*sessions.Session, autoExpand map[string]bool) {
 	if m.filter == "" {
-		return m.projects
+		return m.projects, nil, nil
 	}
 	q := strings.ToLower(m.filter)
-	var out []*sessions.Project
+	sessionOverride = map[string][]*sessions.Session{}
+	autoExpand = map[string]bool{}
 	for _, p := range m.projects {
-		previewMatch := false
-		if len(p.Sessions) > 0 {
-			s := p.Sessions[0]
-			previewMatch = containsCI(s.Preview, q)
-			if m.showAssistant {
-				previewMatch = previewMatch || containsCI(s.AssistantPreview, q)
+		nameMatch := containsCI(p.CWD, q) || containsCI(projectLabel(p.CWD), q)
+		var matched []*sessions.Session
+		for _, s := range p.Sessions {
+			if containsCI(s.Preview, q) || (m.showAssistant && containsCI(s.AssistantPreview, q)) {
+				matched = append(matched, s)
 			}
 		}
-		if containsCI(p.CWD, q) || containsCI(projectLabel(p.CWD), q) || previewMatch {
-			out = append(out, p)
+		switch {
+		case nameMatch:
+			projs = append(projs, p)
+		case len(matched) > 0:
+			projs = append(projs, p)
+			sessionOverride[p.CWD] = matched
+			autoExpand[p.CWD] = true
 		}
 	}
-	return out
+	return projs, sessionOverride, autoExpand
 }
 
-func (m Model) filteredSessions() []*sessions.Session {
-	if m.filter == "" {
-		return m.sessions
+func (m Model) visibleRows() []row {
+	projs, sessionOverride, autoExpand := m.filteredProjects()
+	if m.sort == sortName {
+		sorted := make([]*sessions.Project, len(projs))
+		copy(sorted, projs)
+		sort.Slice(sorted, func(i, j int) bool {
+			return projectLabel(sorted[i].CWD) < projectLabel(sorted[j].CWD)
+		})
+		projs = sorted
 	}
-	q := strings.ToLower(m.filter)
-	var out []*sessions.Session
-	for _, s := range m.sessions {
-		previewMatch := containsCI(s.Preview, q)
-		if m.showAssistant {
-			previewMatch = previewMatch || containsCI(s.AssistantPreview, q)
+	var rows []row
+	for _, p := range projs {
+		rows = append(rows, row{project: p})
+		if !m.expanded[p.CWD] && !autoExpand[p.CWD] {
+			continue
 		}
-		if containsCI(s.CWD, q) || containsCI(projectLabel(s.CWD), q) || previewMatch {
-			out = append(out, s)
+		sess := p.Sessions
+		if override, ok := sessionOverride[p.CWD]; ok {
+			sess = override
+		}
+		for _, s := range sess {
+			rows = append(rows, row{project: p, session: s})
 		}
 	}
-	return out
+	return rows
 }
 
 // ---------- view ----------
@@ -296,23 +328,13 @@ var (
 	orange    = lipgloss.Color("#D4825A")
 	dimStyle  = rnd.NewStyle().Foreground(lipgloss.Color("241"))
 	hiStyle   = rnd.NewStyle().Foreground(lipgloss.Color("0")).Background(orange)
-	tabActive = rnd.NewStyle().Bold(true).Foreground(orange).Underline(true).Padding(0, 1)
-	tabIdle   = rnd.NewStyle().Foreground(lipgloss.Color("244")).Padding(0, 1)
-	toolStyle = rnd.NewStyle().Bold(true).Foreground(orange)
+	titleStyle = rnd.NewStyle().Bold(true).Foreground(orange)
 )
 
 func (m Model) View() string {
 	var b strings.Builder
 
-	b.WriteString(toolStyle.Render("cnav"))
-	b.WriteString(" ")
-	if m.view == viewChats {
-		b.WriteString(tabActive.Render("▸ Chats"))
-		b.WriteString(tabIdle.Render("  Projects"))
-	} else {
-		b.WriteString(tabIdle.Render("  Chats"))
-		b.WriteString(tabActive.Render("▸ Projects"))
-	}
+	b.WriteString(titleStyle.Render("cnav"))
 	b.WriteString("   ")
 	b.WriteString(m.stateIndicators())
 	b.WriteString("\n\n")
@@ -324,12 +346,7 @@ func (m Model) View() string {
 	if listH < 5 {
 		listH = 5
 	}
-	switch m.view {
-	case viewChats:
-		b.WriteString(m.renderSessionList(m.sortedSessions(), listH))
-	case viewProjects:
-		b.WriteString(m.renderProjectList(m.sortedProjects(), listH))
-	}
+	b.WriteString(m.renderRows(m.visibleRows(), listH))
 
 	if m.hiddenWorktreeCount > 0 {
 		b.WriteString(dimStyle.Render(fmt.Sprintf(
@@ -369,35 +386,22 @@ func (m Model) stateIndicators() string {
 	return dimStyle.Render(strings.Join(parts, "   "))
 }
 
-func (m Model) renderSessionList(list []*sessions.Session, h int) string {
-	if len(list) == 0 {
-		return dimStyle.Render("  no sessions")
+func (m Model) renderRows(rows []row, h int) string {
+	if len(rows) == 0 {
+		return dimStyle.Render("  no projects")
 	}
-	cwdCount := make(map[string]int, len(m.projects))
-	for _, p := range m.projects {
-		cwdCount[p.CWD] = len(p.Sessions)
-	}
-	start, end := windowAround(m.cursor, len(list), h)
+	start, end := windowAround(m.cursor, len(rows), h)
+	labelWidth := max(10, min(40, (m.width-20)/4))
+
 	var b strings.Builder
 	for i := start; i < end; i++ {
-		s := list[i]
-		ago := humanAgo(s.Started)
-		indicator := dimStyle.Render("you ")
-		var preview string
-		if m.showAssistant {
-			indicator = dimStyle.Render("ai  ")
-			preview = s.AssistantPreview
-			if preview == "" {
-				preview = dimStyle.Render("(no assistant message)")
-			}
+		r := rows[i]
+		var line string
+		if r.isProject() {
+			line = m.renderProjectRow(r.project, labelWidth)
 		} else {
-			preview = s.Preview
-			if preview == "" {
-				preview = dimStyle.Render("(no user message)")
-			}
+			line = m.renderChatRow(r.session, labelWidth)
 		}
-		cnt := dimStyle.Render(fmt.Sprintf("%2d", min(99, cwdCount[s.CWD])))
-		line := fmt.Sprintf("%-10s  %-22s  %s  %s%s", ago, chatLabel(s.CWD, 22), cnt, indicator, truncRunes(preview, max(1, m.width-47)))
 		if i == m.cursor {
 			b.WriteString(hiStyle.Render("▶ " + line))
 		} else {
@@ -408,63 +412,72 @@ func (m Model) renderSessionList(list []*sessions.Session, h int) string {
 	return b.String()
 }
 
-func (m Model) renderProjectList(list []*sessions.Project, h int) string {
-	if len(list) == 0 {
-		return dimStyle.Render("  no projects")
+func (m Model) renderProjectRow(p *sessions.Project, labelWidth int) string {
+	ago := humanAgo(p.LastActivity)
+	chevron := "▸"
+	if m.expanded[p.CWD] {
+		chevron = "▾"
 	}
-	start, end := windowAround(m.cursor, len(list), h)
-	var b strings.Builder
-	for i := start; i < end; i++ {
-		p := list[i]
-		ago := humanAgo(p.LastActivity)
-		labelWidth := max(10, min(40, (m.width-20)/4))
-		projLabel := projectLabel(p.CWD)
-		label := truncRunes(projLabel, labelWidth)
-		if isWorktree(p.CWD) {
-			label = "⎇ " + truncRunes(projLabel, labelWidth-2)
-		}
-		indicator := dimStyle.Render("you ")
-		var previewText string
-		if len(p.Sessions) > 0 {
-			s := p.Sessions[0]
-			if m.showAssistant {
-				indicator = dimStyle.Render("ai  ")
-				previewText = s.AssistantPreview
-				if previewText == "" {
-					previewText = dimStyle.Render("(no assistant message)")
-				}
-			} else {
-				previewText = s.Preview
-				if previewText == "" {
-					previewText = dimStyle.Render("(no user message)")
-				}
-			}
-		} else {
-			previewText = dimStyle.Render("(no sessions)")
-		}
-		previewWidth := max(1, m.width-20-labelWidth)
-		line := fmt.Sprintf("%-10s  %-*s  %s%s", ago, labelWidth, label, indicator, truncRunes(previewText, previewWidth))
-		if i == m.cursor {
-			b.WriteString(hiStyle.Render("▶ " + line))
-		} else {
-			b.WriteString("  " + line)
-		}
-		b.WriteString("\n")
+	projLabel := projectLabel(p.CWD)
+	if isWorktree(p.CWD) {
+		projLabel = "⎇ " + projLabel
 	}
-	return b.String()
+	label := chevron + " " + truncRunes(projLabel, labelWidth-2)
+	previewWidth := max(1, m.width-20-labelWidth)
+
+	if m.expanded[p.CWD] {
+		n := len(p.Sessions)
+		tail := dimStyle.Render(fmt.Sprintf("%d chat%s", n, plural(n)))
+		return fmt.Sprintf("%-10s  %-*s  %s", ago, labelWidth, label, tail)
+	}
+
+	var indicator, previewText string
+	if len(p.Sessions) > 0 {
+		indicator, previewText = m.sessionPreview(p.Sessions[0])
+	} else {
+		indicator = dimStyle.Render("you ")
+		previewText = dimStyle.Render("(no sessions)")
+	}
+	return fmt.Sprintf("%-10s  %-*s  %s%s", ago, labelWidth, label, indicator, truncRunes(previewText, previewWidth))
+}
+
+func (m Model) renderChatRow(s *sessions.Session, labelWidth int) string {
+	ago := humanAgo(s.Started)
+	indicator, preview := m.sessionPreview(s)
+	label := dimStyle.Render("  └")
+	previewWidth := max(1, m.width-20-labelWidth)
+	return fmt.Sprintf("%-10s  %-*s  %s%s", ago, labelWidth, label, indicator, truncRunes(preview, previewWidth))
+}
+
+// sessionPreview returns the dim "you/ai " indicator and the preview text for a
+// session, honoring the showAssistant toggle and substituting a placeholder
+// when the chosen preview is empty.
+func (m Model) sessionPreview(s *sessions.Session) (indicator, preview string) {
+	if m.showAssistant {
+		indicator = dimStyle.Render("ai  ")
+		preview = s.AssistantPreview
+		if preview == "" {
+			preview = dimStyle.Render("(no assistant message)")
+		}
+		return indicator, preview
+	}
+	indicator = dimStyle.Render("you ")
+	preview = s.Preview
+	if preview == "" {
+		preview = dimStyle.Render("(no user message)")
+	}
+	return indicator, preview
 }
 
 func (m Model) footerKeys() string {
 	if m.filtering {
 		return "↵  apply   esc  clear"
 	}
-	switch m.view {
-	case viewChats:
-		return "↵  cd+resume   shift+↵  cd   g/G top/btm   ← → tab   s sort   p preview   / filter   q quit"
-	case viewProjects:
-		return "↵  cd+claude   R resume   shift+↵  cd   g/G top/btm   ← → tab   s sort   p preview   / filter   q quit"
+	r, ok := m.selectedRow()
+	if ok && !r.isProject() {
+		return "↵  cd+resume   shift+↵  cd   ← collapse   space toggle   g/G top/btm   s sort   p preview   / filter   q quit"
 	}
-	return ""
+	return "↵  cd+claude   R resume latest   shift+↵  cd   → expand   space toggle   g/G top/btm   s sort   p preview   / filter   q quit"
 }
 
 // ---------- helpers ----------
@@ -481,17 +494,6 @@ func projectLabel(cwd string) string {
 		return filepath.Base(before) + " → " + after
 	}
 	return filepath.Base(cwd)
-}
-
-func chatLabel(cwd string, n int) string {
-	if _, after, ok := strings.Cut(cwd, wtSep); ok {
-		full := projectLabel(cwd)
-		if len([]rune(full)) <= n {
-			return full
-		}
-		return truncRunes(after, n)
-	}
-	return truncRunes(filepath.Base(cwd), n)
 }
 
 func humanAgo(t time.Time) string {

@@ -4,10 +4,7 @@ A small TUI for jumping between Claude Code projects and resuming past chats.
 
 ## What it does
 
-`cnav` reads `~/.claude/projects/` and shows two views:
-
-- **Chats** — every Claude Code session you've ever had, newest first. Pick one and jump straight back in.
-- **Projects** — every directory Claude has run in, sorted by most-recent activity. Pick one to `cd` there.
+`cnav` reads `~/.claude/projects/` and shows every directory Claude has run in, sorted by most-recent activity. Pick one to `cd` there and launch a fresh session, or expand it inline to see and resume any past chat in that project.
 
 ## Why a shell function
 
@@ -25,12 +22,13 @@ That builds `$GOPATH/bin/cnav-bin` and appends a one-line `eval "$(cnav-bin init
 
 | Key                     | Action                                              |
 |-------------------------|-----------------------------------------------------|
-| `tab` / `←` / `→`      | toggle between Chats and Projects                   |
-| `1` / `2`               | jump to Chats / Projects view                       |
 | `j`/`k`, `↑`/`↓`       | move cursor                                         |
-| `enter` (Chats)         | cd + resume that chat                               |
-| `enter` (Projects)      | cd + launch fresh `claude`                          |
-| `R` (Projects)          | cd + resume most recent session for that project    |
+| `space`                 | toggle expansion of the current project             |
+| `→` / `l`               | expand project, or descend into its chats           |
+| `←` / `h`               | collapse project (jumps to parent if on a chat row) |
+| `enter` (project row)   | cd + launch fresh `claude`                          |
+| `enter` (chat row)      | cd + resume that chat                               |
+| `R` (project row)       | cd + resume most recent session for that project    |
 | `shift+enter`           | cd only                                             |
 | `g` / `G`               | jump to top / bottom of list                        |
 | `s`                     | toggle sort: recent / name                          |
@@ -50,6 +48,7 @@ That builds `$GOPATH/bin/cnav-bin` and appends a one-line `eval "$(cnav-bin init
 - "Resume" runs `claude --resume <session-id>` after `cd`.
 - The session list is built fresh on every launch (no cache). Scanning is parallel; on a few hundred sessions it's instant. Session files larger than 1 MB use a two-phase scan (first 50 lines for metadata, last 256 KB for preview) to stay fast on long sessions.
 - A session's project path comes from the first `cwd` field in its jsonl (the slug-encoded directory name isn't reversible if a path component contains `-`).
-- The preview column (shown in both Chats and Projects views) shows your last message by default; press `p` to switch to Claude's longest reply. Each row shows a dim `you` / `ai` prefix so the active mode is visible without looking at the header. `/clear`, `/compact`, and `/reset` are skipped when determining the last user message. System-injected XML blocks are stripped from preview text.
+- The preview column shows your last message by default; press `p` to switch to Claude's longest reply. Each row shows a dim `you` / `ai` prefix so the active mode is visible without looking at the header. `/clear`, `/compact`, and `/reset` are skipped when determining the last user message. System-injected XML blocks are stripped from preview text.
+- Filtering searches across **all** sessions in every project, not just the newest. If a match comes from an older chat, that project auto-expands and only the matching chats are shown.
 - Worktree sessions are hidden if the worktree directory no longer exists on disk.
-- Active state (sort order, preview mode, filter text) is shown inline in the header next to the tab indicator.
+- Active state (sort order, preview mode, filter text) is shown inline in the header next to the `cnav` title.
