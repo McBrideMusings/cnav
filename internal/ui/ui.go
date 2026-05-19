@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/pierce/cnav/internal/config"
 	"github.com/pierce/cnav/internal/sessions"
 	"github.com/pierce/cnav/internal/shell"
 )
@@ -25,6 +26,7 @@ const (
 type Model struct {
 	sessions []*sessions.Session
 	projects []*sessions.Project
+	cfg      *config.Config
 
 	cursor              int
 	expanded            map[string]bool
@@ -32,6 +34,10 @@ type Model struct {
 	filtering           bool
 	sort                sortOrder
 	showAssistant       bool
+	showHidden          bool
+	renaming            bool
+	renameBuf           string
+	renameTarget        string
 	width               int
 	height              int
 	hiddenWorktreeCount int
@@ -49,10 +55,11 @@ type row struct {
 
 func (r row) isProject() bool { return r.session == nil }
 
-func New(ss []*sessions.Session, hiddenWorktreeCount int) Model {
+func New(ss []*sessions.Session, hiddenWorktreeCount int, cfg *config.Config) Model {
 	return Model{
 		sessions:            ss,
 		projects:            sessions.GroupByProject(ss),
+		cfg:                 cfg,
 		expanded:            map[string]bool{},
 		hiddenWorktreeCount: hiddenWorktreeCount,
 	}
@@ -67,12 +74,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.KeyMsg:
+		if m.renaming {
+			return m.updateRename(msg)
+		}
 		if m.filtering {
 			return m.updateFilter(msg)
 		}
 		return m.updateNormal(msg)
 	}
 	return m, nil
+}
+
+func (m Model) updateRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		return m.endRename(), nil
+	case tea.KeyEnter:
+		m.cfg.SetName(m.renameTarget, strings.TrimSpace(m.renameBuf))
+		m.saveConfig()
+		return m.endRename(), nil
+	case tea.KeyBackspace:
+		if r := []rune(m.renameBuf); len(r) > 0 {
+			m.renameBuf = string(r[:len(r)-1])
+		}
+	case tea.KeyRunes, tea.KeySpace:
+		m.renameBuf += string(msg.Runes)
+	}
+	return m, nil
+}
+
+func (m Model) endRename() Model {
+	m.renaming = false
+	m.renameBuf = ""
+	m.renameTarget = ""
+	return m
+}
+
+// saveConfig persists the config and reports any error to stderr so the TUI
+// keeps running. Persistence failures are non-fatal — the in-memory state still
+// reflects the user's intent for the current session.
+func (m Model) saveConfig() {
+	if err := m.cfg.Save(); err != nil {
+		fmt.Fprintln(os.Stderr, "cnav: save config:", err)
+	}
 }
 
 func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -132,12 +176,51 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.collapseOrAscend(), nil
 	case "R":
 		return m.activateResumeLatest()
+	case "H":
+		m.showHidden = !m.showHidden
+		m.clampCursor()
+	case "x":
+		return m.toggleHidden(), nil
+	case "r":
+		return m.beginRename(), nil
 	case "enter":
 		return m.activate()
 	case "shift+enter":
 		return m.activateCD()
 	}
 	return m, nil
+}
+
+func (m Model) toggleHidden() Model {
+	r, ok := m.selectedRow()
+	if !ok || !r.isProject() {
+		return m
+	}
+	cwd := r.project.CWD
+	m.cfg.SetHidden(cwd, !m.cfg.Lookup(cwd).Hidden)
+	m.saveConfig()
+	// Cursor may now point past the end if we hid the last visible row.
+	m.clampCursor()
+	return m
+}
+
+// clampCursor pulls the cursor back into range after the visible row set
+// shrinks (hiding the last row, toggling show-hidden off, etc.).
+func (m *Model) clampCursor() {
+	if n := len(m.visibleRows()); n > 0 && m.cursor >= n {
+		m.cursor = n - 1
+	}
+}
+
+func (m Model) beginRename() Model {
+	r, ok := m.selectedRow()
+	if !ok || !r.isProject() {
+		return m
+	}
+	m.renaming = true
+	m.renameTarget = r.project.CWD
+	m.renameBuf = m.displayLabel(r.project.CWD, nil)
+	return m
 }
 
 // toggleExpand flips expansion on the project owning the current row.
@@ -265,16 +348,29 @@ func (m Model) maxCursor() int {
 
 // filteredProjects narrows projects by the active filter. When a project name
 // doesn't match but some of its sessions do, only those matching sessions are
-// returned and the project is marked auto-expanded.
+// returned and the project is marked auto-expanded. Hidden projects are
+// excluded unless show-hidden mode is on (decision Q5/C: filter scope follows
+// show-hidden mode).
 func (m Model) filteredProjects() (projs []*sessions.Project, sessionOverride map[string][]*sessions.Session, autoExpand map[string]bool) {
+	visible := make([]*sessions.Project, 0, len(m.projects))
+	for _, p := range m.projects {
+		if m.cfg.Lookup(p.CWD).Hidden && !m.showHidden {
+			continue
+		}
+		visible = append(visible, p)
+	}
 	if m.filter == "" {
-		return m.projects, nil, nil
+		return visible, nil, nil
 	}
 	q := strings.ToLower(m.filter)
 	sessionOverride = map[string][]*sessions.Session{}
 	autoExpand = map[string]bool{}
-	for _, p := range m.projects {
-		nameMatch := containsCI(p.CWD, q) || containsCI(projectLabel(p.CWD), q)
+	for _, p := range visible {
+		ov := m.cfg.Lookup(p.CWD)
+		nameMatch := containsCI(p.CWD, q) || containsCI(filepath.Base(p.CWD), q)
+		if ov.Name != "" {
+			nameMatch = nameMatch || containsCI(ov.Name, q)
+		}
 		var matched []*sessions.Session
 		for _, s := range p.Sessions {
 			if containsCI(s.Preview, q) || (m.showAssistant && containsCI(s.AssistantPreview, q)) {
@@ -299,7 +395,7 @@ func (m Model) visibleRows() []row {
 		sorted := make([]*sessions.Project, len(projs))
 		copy(sorted, projs)
 		sort.Slice(sorted, func(i, j int) bool {
-			return projectLabel(sorted[i].CWD) < projectLabel(sorted[j].CWD)
+			return m.displayLabel(sorted[i].CWD, nil) < m.displayLabel(sorted[j].CWD, nil)
 		})
 		projs = sorted
 	}
@@ -325,9 +421,9 @@ func (m Model) visibleRows() []row {
 var rnd = lipgloss.NewRenderer(os.Stderr)
 
 var (
-	orange    = lipgloss.Color("#D4825A")
-	dimStyle  = rnd.NewStyle().Foreground(lipgloss.Color("241"))
-	hiStyle   = rnd.NewStyle().Foreground(lipgloss.Color("0")).Background(orange)
+	orange     = lipgloss.Color("#D4825A")
+	dimStyle   = rnd.NewStyle().Foreground(lipgloss.Color("241"))
+	hiStyle    = rnd.NewStyle().Foreground(lipgloss.Color("0")).Background(orange)
 	titleStyle = rnd.NewStyle().Bold(true).Foreground(orange)
 )
 
@@ -339,8 +435,13 @@ func (m Model) View() string {
 	b.WriteString(m.stateIndicators())
 	b.WriteString("\n\n")
 
+	hiddenCount := m.hiddenProjectCount()
+
 	listH := m.height - 4
 	if m.hiddenWorktreeCount > 0 {
+		listH--
+	}
+	if hiddenCount > 0 {
 		listH--
 	}
 	if listH < 5 {
@@ -354,10 +455,33 @@ func (m Model) View() string {
 			m.hiddenWorktreeCount, plural(m.hiddenWorktreeCount))))
 		b.WriteString("\n")
 	}
+	if hiddenCount > 0 {
+		state := "H to view"
+		if m.showHidden {
+			state = "H to collapse"
+		}
+		b.WriteString(dimStyle.Render(fmt.Sprintf(
+			"  (%d project%s hidden — %s)",
+			hiddenCount, plural(hiddenCount), state)))
+		b.WriteString("\n")
+	}
 
 	b.WriteString("\n")
 	b.WriteString(dimStyle.Render(m.footerKeys()))
 	return b.String()
+}
+
+func (m Model) hiddenProjectCount() int {
+	if m.cfg == nil {
+		return 0
+	}
+	n := 0
+	for _, p := range m.projects {
+		if m.cfg.Lookup(p.CWD).Hidden {
+			n++
+		}
+	}
+	return n
 }
 
 func (m Model) stateIndicators() string {
@@ -393,18 +517,32 @@ func (m Model) renderRows(rows []row, h int) string {
 	start, end := windowAround(m.cursor, len(rows), h)
 	labelWidth := max(10, min(40, (m.width-20)/4))
 
+	// Collisions are computed over the visible project set so the suffix
+	// reflects what the user can actually see.
+	var visibleProjects []*sessions.Project
+	for _, r := range rows {
+		if r.isProject() {
+			visibleProjects = append(visibleProjects, r.project)
+		}
+	}
+	collisions := m.collisionCounts(visibleProjects)
+
 	var b strings.Builder
 	for i := start; i < end; i++ {
 		r := rows[i]
 		var line string
 		if r.isProject() {
-			line = m.renderProjectRow(r.project, labelWidth)
+			line = m.renderProjectRow(r.project, labelWidth, collisions)
 		} else {
 			line = m.renderChatRow(r.session, labelWidth)
 		}
-		if i == m.cursor {
+		hidden := r.isProject() && m.cfg.Lookup(r.project.CWD).Hidden
+		switch {
+		case i == m.cursor:
 			b.WriteString(hiStyle.Render("▶ " + line))
-		} else {
+		case hidden:
+			b.WriteString(dimStyle.Render("  " + line))
+		default:
 			b.WriteString("  " + line)
 		}
 		b.WriteString("\n")
@@ -412,13 +550,20 @@ func (m Model) renderRows(rows []row, h int) string {
 	return b.String()
 }
 
-func (m Model) renderProjectRow(p *sessions.Project, labelWidth int) string {
+func (m Model) renderProjectRow(p *sessions.Project, labelWidth int, collisions map[string]int) string {
 	ago := humanAgo(p.LastActivity)
 	chevron := "▸"
 	if m.expanded[p.CWD] {
 		chevron = "▾"
 	}
-	projLabel := projectLabel(p.CWD)
+
+	// Inline-edit mode for rename: replace the rest of the row with the editor
+	// so the cursor stands out and long names aren't truncated.
+	if m.renaming && m.renameTarget == p.CWD {
+		return fmt.Sprintf("%-10s  %s %s█", ago, chevron, m.renameBuf)
+	}
+
+	projLabel := m.displayLabel(p.CWD, collisions)
 	if isWorktree(p.CWD) {
 		projLabel = "⎇ " + projLabel
 	}
@@ -470,6 +615,9 @@ func (m Model) sessionPreview(s *sessions.Session) (indicator, preview string) {
 }
 
 func (m Model) footerKeys() string {
+	if m.renaming {
+		return "↵  save   esc  cancel   (empty + ↵ to clear)"
+	}
 	if m.filtering {
 		return "↵  apply   esc  clear"
 	}
@@ -477,7 +625,7 @@ func (m Model) footerKeys() string {
 	if ok && !r.isProject() {
 		return "↵  cd+resume   shift+↵  cd   ← collapse   space toggle   g/G top/btm   s sort   p preview   / filter   q quit"
 	}
-	return "↵  cd+claude   R resume latest   shift+↵  cd   → expand   space toggle   g/G top/btm   s sort   p preview   / filter   q quit"
+	return "↵  cd+claude   R resume   x hide   r rename   shift+↵  cd   → expand   space toggle   g/G top/btm   s sort   p preview   / filter   H show-hidden   q quit"
 }
 
 // ---------- helpers ----------
@@ -489,11 +637,41 @@ func isWorktree(cwd string) bool {
 	return found
 }
 
-func projectLabel(cwd string) string {
+// displayLabel returns the label to render for a project. Custom name wins;
+// then worktree formatting; then auto-disambiguation when the basename collides
+// with another visible project (collisions == nil disables disambiguation —
+// callers like sort pass nil so order is stable regardless of which projects
+// are currently visible).
+func (m Model) displayLabel(cwd string, collisions map[string]int) string {
+	if ov := m.cfg.Lookup(cwd); ov.Name != "" {
+		return ov.Name
+	}
 	if before, after, ok := strings.Cut(cwd, wtSep); ok {
 		return filepath.Base(before) + " → " + after
 	}
-	return filepath.Base(cwd)
+	base := filepath.Base(cwd)
+	if collisions != nil && collisions[base] > 1 {
+		parent := filepath.Base(filepath.Dir(cwd))
+		return base + " (" + parent + "/)"
+	}
+	return base
+}
+
+// collisionCounts tallies basenames across the given visible projects, skipping
+// projects with a custom name (those don't need disambiguation) and worktree
+// rows (those already disambiguate via the "→ branch-path" form).
+func (m Model) collisionCounts(projs []*sessions.Project) map[string]int {
+	counts := map[string]int{}
+	for _, p := range projs {
+		if m.cfg.Lookup(p.CWD).Name != "" {
+			continue
+		}
+		if strings.Contains(p.CWD, wtSep) {
+			continue
+		}
+		counts[filepath.Base(p.CWD)]++
+	}
+	return counts
 }
 
 func humanAgo(t time.Time) string {

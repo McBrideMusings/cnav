@@ -34,7 +34,26 @@ That builds `$GOPATH/bin/cnav-bin` and appends a one-line `eval "$(cnav-bin init
 | `s`                     | toggle sort: recent / name                          |
 | `p`                     | toggle preview: your last message / Claude's reply  |
 | `/`                     | filter (hotkey bar updates to show only active keys)|
+| `x` (project row)       | toggle hidden — persists to config                  |
+| `r` (project row)       | rename project label inline                         |
+| `H`                     | reveal hidden projects (dimmed, still interactable) |
 | `q` / `esc`             | quit                                                |
+
+## Per-project overrides
+
+`~/.config/cnav/config.toml` stores hide/rename state. The TUI writes it; you can also hand-edit:
+
+```toml
+[[project]]
+cwd = "/Users/pierce/.claude"
+hidden = true
+
+[[project]]
+cwd = "/Users/pierce/Projects/.claude"
+name = "dotclaude-projects"
+```
+
+Identical basenames are auto-disambiguated in the list (`.claude (pierce/)`, `.claude (Projects/)`); a manual `name` wins when set.
 
 ## Layout
 

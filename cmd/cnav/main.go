@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/pierce/cnav/internal/config"
 	"github.com/pierce/cnav/internal/sessions"
 	"github.com/pierce/cnav/internal/shell"
 	"github.com/pierce/cnav/internal/ui"
@@ -38,8 +39,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cnav: load config:", err)
+		os.Exit(1)
+	}
+
 	// TUI on stderr so stdout stays clean for the wrapper to eval.
-	p := tea.NewProgram(ui.New(ss, hidden), tea.WithOutput(os.Stderr), tea.WithAltScreen())
+	p := tea.NewProgram(ui.New(ss, hidden, cfg), tea.WithOutput(os.Stderr), tea.WithAltScreen())
 	m, err := p.Run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cnav:", err)

@@ -18,10 +18,10 @@ import (
 
 // Session is one Claude Code session (one .jsonl file).
 type Session struct {
-	ID              string    // sessionId
-	CWD             string    // project dir claude ran in
-	File            string    // absolute path to jsonl
-	ModTime         time.Time // file mtime
+	ID               string    // sessionId
+	CWD              string    // project dir claude ran in
+	File             string    // absolute path to jsonl
+	ModTime          time.Time // file mtime
 	Started          time.Time // first user-message timestamp (fallback: ModTime)
 	Preview          string    // last non-skippable user message, truncated
 	AssistantPreview string    // last assistant text block, truncated
