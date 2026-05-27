@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -31,7 +32,6 @@ type Model struct {
 	cursor              int
 	expanded            map[string]bool
 	filter              string
-	filtering           bool
 	sort                sortOrder
 	showAssistant       bool
 	showHidden          bool
@@ -77,10 +77,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.renaming {
 			return m.updateRename(msg)
 		}
-		if m.filtering {
-			return m.updateFilter(msg)
-		}
-		return m.updateNormal(msg)
+		return m.updateKey(msg)
 	}
 	return m, nil
 }
@@ -119,74 +116,85 @@ func (m Model) saveConfig() {
 	}
 }
 
-func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEsc:
-		m.filtering = false
-		m.filter = ""
-		m.cursor = 0
-	case tea.KeyEnter:
-		m.filtering = false
-	case tea.KeyBackspace:
-		if len(m.filter) > 0 {
-			m.filter = m.filter[:len(m.filter)-1]
-			m.cursor = 0
-		}
-	case tea.KeyRunes, tea.KeySpace:
-		m.filter += string(msg.Runes)
-		m.cursor = 0
-	}
-	return m, nil
-}
-
-func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// updateKey is the single key handler for the main list. The list is always in
+// "type to filter" mode: any printable rune appends to the filter. Navigation
+// uses arrows (and ctrl+n/ctrl+p), management commands live behind alt-chords so
+// their letters stay free for the filter, and esc clears the filter (or quits
+// when the filter is already empty).
+func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "q", "ctrl+c", "esc":
+	case "ctrl+c":
 		m.Done = true
 		return m, tea.Quit
-	case "j", "down":
+	case "esc":
+		if m.filter != "" {
+			m.filter = ""
+			m.cursor = 0
+			return m, nil
+		}
+		m.Done = true
+		return m, tea.Quit
+	case "down", "ctrl+n":
 		if m.cursor < m.maxCursor() {
 			m.cursor++
 		}
-	case "k", "up":
+		return m, nil
+	case "up", "ctrl+p":
 		if m.cursor > 0 {
 			m.cursor--
 		}
-	case "g":
+		return m, nil
+	case "home":
 		m.cursor = 0
-	case "G":
+		return m, nil
+	case "end":
 		m.cursor = m.maxCursor()
-	case "s":
+		return m, nil
+	case "right":
+		return m.expandOrDescend(), nil
+	case "left":
+		return m.collapseOrAscend(), nil
+	case "enter":
+		return m.activate()
+	case "shift+enter":
+		return m.activateCD()
+	case "ctrl+r":
+		return m.activateResumeLatest()
+	case "alt+x":
+		return m.toggleHidden(), nil
+	case "alt+r":
+		return m.beginRename(), nil
+	case "alt+s":
 		if m.sort == sortRecent {
 			m.sort = sortName
 		} else {
 			m.sort = sortRecent
 		}
 		m.cursor = 0
-	case "p":
+		return m, nil
+	case "alt+p":
 		m.showAssistant = !m.showAssistant
-	case "/":
-		m.filtering = true
-		m.filter = ""
-	case " ", "space":
-		return m.toggleExpand(), nil
-	case "right", "l":
-		return m.expandOrDescend(), nil
-	case "left", "h":
-		return m.collapseOrAscend(), nil
-	case "R":
-		return m.activateResumeLatest()
-	case "H":
+		return m, nil
+	case "alt+h":
 		m.showHidden = !m.showHidden
 		m.clampCursor()
-	case "x":
-		return m.toggleHidden(), nil
-	case "r":
-		return m.beginRename(), nil
-	case "enter":
-		return m.activate()
-	case "shift+enter":
-		return m.activateCD()
+		return m, nil
+	case "backspace":
+		if len(m.filter) > 0 {
+			m.filter = m.filter[:len(m.filter)-1]
+			m.cursor = 0
+		}
+		return m, nil
+	}
+	// Default: printable runes (and space) feed the filter. Unhandled alt-chords
+	// arrive as KeyRunes with Alt set — skip those so a stray Option press
+	// doesn't inject its base letter into the filter.
+	switch msg.Type {
+	case tea.KeyRunes, tea.KeySpace:
+		if !msg.Alt {
+			m.filter += string(msg.Runes)
+			m.cursor = 0
+		}
 	}
 	return m, nil
 }
@@ -220,25 +228,6 @@ func (m Model) beginRename() Model {
 	m.renaming = true
 	m.renameTarget = r.project.CWD
 	m.renameBuf = m.displayLabel(r.project.CWD, nil)
-	return m
-}
-
-// toggleExpand flips expansion on the project owning the current row.
-func (m Model) toggleExpand() Model {
-	r, ok := m.selectedRow()
-	if !ok {
-		return m
-	}
-	cwd := r.project.CWD
-	if m.expanded[cwd] {
-		delete(m.expanded, cwd)
-		// If cursor was on a child of this project, move it to the project row.
-		if !r.isProject() {
-			m.cursor = m.projectRowIndex(cwd)
-		}
-	} else {
-		m.expanded[cwd] = true
-	}
 	return m
 }
 
@@ -346,12 +335,10 @@ func (m Model) maxCursor() int {
 	return n - 1
 }
 
-// filteredProjects narrows projects by the active filter. When a project name
-// doesn't match but some of its sessions do, only those matching sessions are
-// returned and the project is marked auto-expanded. Hidden projects are
-// excluded unless show-hidden mode is on (decision Q5/C: filter scope follows
-// show-hidden mode).
-func (m Model) filteredProjects() (projs []*sessions.Project, sessionOverride map[string][]*sessions.Session, autoExpand map[string]bool) {
+// filteredProjects narrows projects by the active filter, matching project
+// names only (CWD path, basename, or custom label) — not chat previews. Hidden
+// projects are excluded unless show-hidden mode is on.
+func (m Model) filteredProjects() []*sessions.Project {
 	visible := make([]*sessions.Project, 0, len(m.projects))
 	for _, p := range m.projects {
 		if m.cfg.Lookup(p.CWD).Hidden && !m.showHidden {
@@ -360,37 +347,25 @@ func (m Model) filteredProjects() (projs []*sessions.Project, sessionOverride ma
 		visible = append(visible, p)
 	}
 	if m.filter == "" {
-		return visible, nil, nil
+		return visible
 	}
 	q := strings.ToLower(m.filter)
-	sessionOverride = map[string][]*sessions.Session{}
-	autoExpand = map[string]bool{}
+	var projs []*sessions.Project
 	for _, p := range visible {
 		ov := m.cfg.Lookup(p.CWD)
 		nameMatch := containsCI(p.CWD, q) || containsCI(filepath.Base(p.CWD), q)
 		if ov.Name != "" {
 			nameMatch = nameMatch || containsCI(ov.Name, q)
 		}
-		var matched []*sessions.Session
-		for _, s := range p.Sessions {
-			if containsCI(s.Preview, q) || (m.showAssistant && containsCI(s.AssistantPreview, q)) {
-				matched = append(matched, s)
-			}
-		}
-		switch {
-		case nameMatch:
+		if nameMatch {
 			projs = append(projs, p)
-		case len(matched) > 0:
-			projs = append(projs, p)
-			sessionOverride[p.CWD] = matched
-			autoExpand[p.CWD] = true
 		}
 	}
-	return projs, sessionOverride, autoExpand
+	return projs
 }
 
 func (m Model) visibleRows() []row {
-	projs, sessionOverride, autoExpand := m.filteredProjects()
+	projs := m.filteredProjects()
 	if m.sort == sortName {
 		sorted := make([]*sessions.Project, len(projs))
 		copy(sorted, projs)
@@ -402,14 +377,10 @@ func (m Model) visibleRows() []row {
 	var rows []row
 	for _, p := range projs {
 		rows = append(rows, row{project: p})
-		if !m.expanded[p.CWD] && !autoExpand[p.CWD] {
+		if !m.expanded[p.CWD] {
 			continue
 		}
-		sess := p.Sessions
-		if override, ok := sessionOverride[p.CWD]; ok {
-			sess = override
-		}
-		for _, s := range sess {
+		for _, s := range p.Sessions {
 			rows = append(rows, row{project: p, session: s})
 		}
 	}
@@ -419,6 +390,17 @@ func (m Model) visibleRows() []row {
 // ---------- view ----------
 
 var rnd = lipgloss.NewRenderer(os.Stderr)
+
+// modKey is the footer label for the Alt/Meta modifier. macOS keyboards label
+// this key Option, so show "opt" there and "alt" elsewhere. This is display-only
+// — Bubble Tea reports the key as "alt+…" on every OS, so the bindings in
+// updateKey stay matched against "alt+…".
+var modKey = func() string {
+	if runtime.GOOS == "darwin" {
+		return "opt"
+	}
+	return "alt"
+}()
 
 var (
 	orange     = lipgloss.Color("#D4825A")
@@ -499,13 +481,9 @@ func (m Model) stateIndicators() string {
 	}
 	parts = append(parts, "preview:"+preview)
 
-	if m.filter != "" || m.filtering {
-		caret := ""
-		if m.filtering {
-			caret = "█"
-		}
-		parts = append(parts, "/"+m.filter+caret)
-	}
+	// The filter is always live (type to filter), so always show the search
+	// field with a caret to signal that typing narrows the list.
+	parts = append(parts, "/"+m.filter+"█")
 
 	return dimStyle.Render(strings.Join(parts, "   "))
 }
@@ -618,14 +596,11 @@ func (m Model) footerKeys() string {
 	if m.renaming {
 		return "↵  save   esc  cancel   (empty + ↵ to clear)"
 	}
-	if m.filtering {
-		return "↵  apply   esc  clear"
-	}
 	r, ok := m.selectedRow()
 	if ok && !r.isProject() {
-		return "↵  cd+resume   shift+↵  cd   ← collapse   space toggle   g/G top/btm   s sort   p preview   / filter   q quit"
+		return fmt.Sprintf("type to filter   ↵ cd+resume   shift+↵ cd   ←/→ collapse/expand   ^n/^p move   %[1]s+s sort   %[1]s+p preview   esc clear   ^c quit", modKey)
 	}
-	return "↵  cd+claude   R resume   x hide   r rename   shift+↵  cd   → expand   space toggle   g/G top/btm   s sort   p preview   / filter   H show-hidden   q quit"
+	return fmt.Sprintf("type to filter   ↵ cd+claude   ^r resume   shift+↵ cd   ←/→ collapse/expand   ^n/^p move   %[1]s+x hide   %[1]s+r rename   %[1]s+s sort   %[1]s+p preview   %[1]s+h show-hidden   esc clear   ^c quit", modKey)
 }
 
 // ---------- helpers ----------

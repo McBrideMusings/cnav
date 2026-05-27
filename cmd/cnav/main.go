@@ -76,16 +76,21 @@ Install:
   2. add to ~/.zshrc:        eval "$(cnav-bin init)"
   3. then run 'cnav' from anywhere.
 
-Keys:
-  tab / left / right   switch between Chats and Projects views
-  1 / 2                jump to Chats / Projects view
-  j / k / arrows       move cursor
-  enter                cd + resume chat  (Chats view)
-                       cd + launch claude (Projects view)
-  c                    cd only
-  r                    cd + fresh claude
-  s                    toggle sort: recent / name
-  /                    filter
-  q / esc              quit
+Keys (the list is always in type-to-filter mode):
+  type                 filter projects by name
+  up / down            move cursor  (also ctrl+p / ctrl+n)
+  right / left         expand / collapse project
+  home / end           jump to top / bottom
+  enter                cd + launch claude  (project row)
+                       cd + resume chat    (chat row)
+  shift+enter          cd only
+  ctrl+r               cd + resume most recent chat  (project row)
+  alt+x                hide project   (alt = Option on macOS)
+  alt+r                rename project
+  alt+s                toggle sort: recent / name
+  alt+p                toggle preview: your message / Claude's reply
+  alt+h                reveal hidden projects
+  esc                  clear filter (quit when the filter is empty)
+  ctrl+c               quit
 `)
 }

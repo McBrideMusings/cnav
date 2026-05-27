@@ -15,7 +15,7 @@ Claude Code stores sessions under `~/.claude/projects/`, one subdirectory per wo
 - `cd` + launch fresh Claude session
 - `cd` + resume a specific session by ID
 - Hide and rename projects (stored in `~/.config/cnav/config.toml`)
-- Filter/search across all sessions
+- Type-to-filter projects by name (matches the project path/label, not chat contents)
 - Preview of last user message or longest assistant reply
 
 **Out of scope:**
