@@ -4,4 +4,7 @@
 /tmp/
 .DS_Store
 *.local
-CLAUDE.local.md
+.claude/*.local.md
+docs/.vitepress/cache
+docs/.vitepress/dist
+node_modules
