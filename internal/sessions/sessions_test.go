@@ -50,6 +50,34 @@ func TestRepoRootNonWorktree(t *testing.T) {
 	}
 }
 
+func TestStatDir(t *testing.T) {
+	tmp := t.TempDir()
+
+	// A path under a mount root whose volume directory is absent is a
+	// disconnected drive, not a deleted project.
+	mountRoots = []string{tmp + "/Volumes/"}
+	t.Cleanup(func() { mountRoots = []string{"/Volumes/", "/mnt/"} })
+	if err := os.MkdirAll(tmp+"/Volumes/Mounted/repo", 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		dir  string
+		want dirState
+	}{
+		{tmp, dirPresent},
+		{tmp + "/Volumes/Mounted/repo", dirPresent},
+		{tmp + "/Volumes/Mounted/gone", dirMissing},
+		{tmp + "/Volumes/Unplugged/repo", dirOffline},
+		{tmp + "/deleted", dirMissing},
+	}
+	for _, c := range cases {
+		if got := statDir(c.dir); got != c.want {
+			t.Errorf("statDir(%q) = %v, want %v", c.dir, got, c.want)
+		}
+	}
+}
+
 func TestGroupByProjectFoldsWorktrees(t *testing.T) {
 	root := "/Users/pierce/Projects/apple-notepad"
 	ss := []*Session{

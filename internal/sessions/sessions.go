@@ -22,6 +22,7 @@ type Session struct {
 	CWD              string    // project dir claude ran in
 	Root             string    // main repo checkout for CWD (== CWD unless CWD is a git worktree)
 	Worktree         string    // worktree directory name when CWD is a git worktree, else ""
+	Offline          bool      // CWD sits on a volume that isn't mounted right now
 	File             string    // absolute path to jsonl
 	ModTime          time.Time // file mtime
 	Started          time.Time // first user-message timestamp (fallback: ModTime)
@@ -37,6 +38,7 @@ type Project struct {
 	Own          []*Session  // chats run in CWD itself, newest first
 	Worktrees    []*Worktree // newest activity first
 	LastActivity time.Time
+	Offline      bool // its volume isn't mounted, so cd would fail until it is
 }
 
 // Worktree is one git worktree of a Project, with the chats run inside it.
@@ -45,6 +47,7 @@ type Worktree struct {
 	Name         string // its directory name, shown on the row
 	Sessions     []*Session
 	LastActivity time.Time
+	Offline      bool // its volume isn't mounted
 }
 
 const (
@@ -131,19 +134,21 @@ func Scan(claudeProjectsDir string) ([]*Session, error) {
 
 	// Drop sessions whose directory is gone — retired worktrees, deleted temp
 	// dirs, moved projects. There is nowhere to cd to, so they are not hidden or
-	// recoverable, they simply don't exist as far as the list is concerned.
-	exists := map[string]bool{}
+	// recoverable, they simply don't exist as far as the list is concerned. A
+	// directory on an unmounted volume is kept and flagged offline instead: it
+	// comes back when the drive does.
+	states := map[string]dirState{}
 	out := slices.DeleteFunc(sessions, func(s *Session) bool {
 		if s == nil {
 			return true
 		}
-		ok, seen := exists[s.CWD]
+		st, seen := states[s.CWD]
 		if !seen {
-			_, err := os.Stat(s.CWD)
-			ok = err == nil
-			exists[s.CWD] = ok
+			st = statDir(s.CWD)
+			states[s.CWD] = st
 		}
-		return !ok
+		s.Offline = st == dirOffline
+		return st == dirMissing
 	})
 
 	resolveRoots(out)
@@ -152,6 +157,40 @@ func Scan(claudeProjectsDir string) ([]*Session, error) {
 		return out[i].Started.After(out[j].Started)
 	})
 	return out, nil
+}
+
+type dirState int
+
+const (
+	dirPresent dirState = iota
+	dirMissing          // deleted: nothing to go back to
+	dirOffline          // on a volume that isn't mounted right now
+)
+
+// mountRoots are the directories whose immediate children are mount points. A
+// path under one of them whose volume directory is absent is a disconnected
+// drive, not a deleted project — the difference matters because one is
+// permanent and the other resolves by plugging the drive back in.
+var mountRoots = []string{"/Volumes/", "/mnt/"}
+
+func statDir(cwd string) dirState {
+	if _, err := os.Stat(cwd); err == nil {
+		return dirPresent
+	}
+	for _, root := range mountRoots {
+		rest, ok := strings.CutPrefix(cwd, root)
+		if !ok {
+			continue
+		}
+		vol, _, _ := strings.Cut(rest, "/")
+		if vol == "" {
+			continue
+		}
+		if _, err := os.Stat(root + vol); err != nil {
+			return dirOffline
+		}
+	}
+	return dirMissing
 }
 
 // resolveRoots fills Root/Worktree on every session, resolving each distinct CWD
@@ -403,11 +442,12 @@ func GroupByProject(sessions []*Session) []*Project {
 		}
 		if s.Worktree == "" {
 			p.Own = append(p.Own, s)
+			p.Offline = p.Offline || s.Offline
 			continue
 		}
 		wt := wtByDir[s.CWD]
 		if wt == nil {
-			wt = &Worktree{Dir: s.CWD, Name: s.Worktree}
+			wt = &Worktree{Dir: s.CWD, Name: s.Worktree, Offline: s.Offline}
 			wtByDir[s.CWD] = wt
 			p.Worktrees = append(p.Worktrees, wt)
 		}

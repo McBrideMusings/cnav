@@ -5,21 +5,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```sh
-./admin build    # go build ./...
-./admin dev      # go run ./cmd/cnav  (TUI draws on stderr)
-./admin test     # go test ./...
-./admin vet      # go vet ./...
-./admin fmt      # gofmt -w .
-./admin deploy   # go build -o $GOPATH/bin/cnav-bin ./cmd/cnav
+admin build    # go build ./...
+admin dev      # go run ./cmd/cnav  (TUI draws on stderr)
+admin test     # go test ./...
+admin vet      # go vet ./...
+admin fmt      # gofmt -w .
+admin deploy   # go build -o $GOPATH/bin/cnav-bin ./cmd/cnav
 ```
 
 Run a single test: `go test ./internal/sessions/ -run TestName -v`
 
-After code changes while `./admin dev` is running in another terminal: `./admin reload` to rebuild and relaunch.
+Run `admin deploy` after every code change, finished or not — it rebuilds `$HOME/go/bin/cnav-bin`, which is what the `cnav` shell wrapper runs.
+
+`admin` is the global runner on `$PATH`; there is no `./admin` in the repo and no `reload` task.
 
 ## Documentation
 
-This project has a VitePress docs site under `docs/`. Run `./admin docs` (or `bun run docs:dev`) to read it on `http://localhost:5193`.
+This project has a VitePress docs site under `docs/`. Run `admin docs` (or `bun run docs:dev`) to read it on `http://localhost:5193`.
 
 Keep these in sync as you work:
 
@@ -56,7 +58,8 @@ Don't write new top-level planning / phase / feature docs in `docs/` — file a 
 - `ui.Model` is value-typed (Bubble Tea pattern) — all state mutations return a new model.
 - Config writes are non-fatal: `saveConfig` prints to stderr and keeps running on failure.
 - Session CWD comes from the first `cwd` field in the JSONL, not the slug-encoded directory name (which isn't reliably reversible).
-- Sessions whose `CWD` no longer exists on disk are dropped in `Scan` with no trace — not hidden, not counted, not recoverable. There is nowhere to `cd`.
+- Sessions whose `CWD` no longer exists on disk are dropped in `Scan` with no trace — not hidden, not counted, not recoverable. There is nowhere to `cd`. The exception is `dirOffline`: a path under `/Volumes/` or `/mnt/` whose volume directory is absent is an unplugged drive, so it stays listed and renders `(volume not mounted)`.
+- Hide/rename (`opt+x`/`opt+r`) apply to any header row — project or worktree — keyed by `row.key()` (project CWD or worktree dir) in the same config file.
 - A session's repo root comes from reading `<cwd>/.git` — a git worktree's `.git` is a file holding `gitdir: <repo>/.git/worktrees/<name>`. Worktrees can live anywhere on disk, so path patterns are never used to detect them.
 - The list is three levels: project → worktree → chat. `GroupByProject` buckets on repo root and splits each project into `Own` (chats in the root itself) and `Worktrees`; `Sessions` still holds all of them for previews and resume-latest. Expanding a project interleaves its own chats and its worktree headers by recency.
 - Basename collisions in the project list are auto-disambiguated by appending the parent directory (`base (parent/)`); a manual `name` in config always wins.

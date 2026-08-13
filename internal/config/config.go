@@ -90,6 +90,9 @@ func (c *Config) SetName(cwd, name string) {
 
 // upsert returns a pointer to the record for cwd, creating one if absent.
 func (c *Config) upsert(cwd string) *ProjectOverride {
+	if c.index == nil {
+		c.rebuildIndex()
+	}
 	if i, ok := c.index[cwd]; ok {
 		return &c.Projects[i]
 	}

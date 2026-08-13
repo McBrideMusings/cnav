@@ -20,6 +20,8 @@ A small TUI for jumping between Claude Code projects and resuming past chats.
 
 **missing session** — a session whose `CWD` no longer exists on disk (retired worktree, deleted temp dir, moved project). Dropped by `Scan` with no trace: not hidden, not counted, not recoverable, since there is nowhere to `cd`. Distinct from a **hidden project**, which the user hid with `opt+x` and can bring back with `opt+h`.
 
+**offline** — a `CWD` under a mount root (`/Volumes/`, `/mnt/`) whose volume directory is absent: the drive isn't plugged in. Kept in the list and shown as `(volume not mounted)` instead of a preview, because it comes back when the drive does — the one case where a missing directory is temporary.
+
 **action** — the `shell.Action` struct that the TUI sets on exit. `Action.Render()` produces the shell command string (`cd`, optionally `&& claude` or `&& claude --resume <id>`) written to stdout for the wrapper to eval. Empty string means quit with no action.
 
 **wrapper** — the `cnav()` zsh function installed into `.zshrc` via `eval "$(cnav-bin init)"`. Captures the binary's stdout and `eval`s it so the parent shell changes directory. The binary cannot change its parent shell's directory directly.

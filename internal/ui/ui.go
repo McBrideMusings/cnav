@@ -25,7 +25,6 @@ const (
 )
 
 type Model struct {
-	sessions []*sessions.Session
 	projects []*sessions.Project
 	cfg      *config.Config
 
@@ -87,7 +86,6 @@ func (r row) chats() []*sessions.Session {
 
 func New(ss []*sessions.Session, cfg *config.Config) Model {
 	return Model{
-		sessions: ss,
 		projects: sessions.GroupByProject(ss),
 		cfg:      cfg,
 		expanded: map[string]bool{},
@@ -230,10 +228,10 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) toggleHidden() Model {
 	r, ok := m.selectedRow()
-	if !ok || !r.isProject() {
+	if !ok || r.isChat() {
 		return m
 	}
-	cwd := r.project.CWD
+	cwd := r.key()
 	m.cfg.SetHidden(cwd, !m.cfg.Lookup(cwd).Hidden)
 	m.saveConfig()
 	// Cursor may now point past the end if we hid the last visible row.
@@ -251,12 +249,16 @@ func (m *Model) clampCursor() {
 
 func (m Model) beginRename() Model {
 	r, ok := m.selectedRow()
-	if !ok || !r.isProject() {
+	if !ok || r.isChat() {
 		return m
 	}
 	m.renaming = true
-	m.renameTarget = r.project.CWD
-	m.renameBuf = m.displayLabel(r.project.CWD, nil)
+	m.renameTarget = r.key()
+	if r.isWorktree() {
+		m.renameBuf = m.worktreeLabel(r.worktree)
+	} else {
+		m.renameBuf = m.displayLabel(r.project.CWD, nil)
+	}
 	return m
 }
 
@@ -426,7 +428,29 @@ func (m Model) visibleRows() []row {
 // worktree's own chats follow it when it's expanded.
 func (m Model) childRows(p *sessions.Project) []row {
 	var rows []row
-	own, wts := p.Own, p.Worktrees
+	own, wts := p.Own, m.visibleWorktrees(p)
+	if m.sort == sortName {
+		sorted := make([]*sessions.Worktree, len(wts))
+		copy(sorted, wts)
+		sort.Slice(sorted, func(i, j int) bool {
+			return m.worktreeLabel(sorted[i]) < m.worktreeLabel(sorted[j])
+		})
+		// Name sort orders the whole subtree by name: worktrees first as a block,
+		// then the project's own chats, which have no name to sort by.
+		for _, wt := range sorted {
+			rows = append(rows, row{project: p, worktree: wt})
+			if !m.expanded[wt.Dir] {
+				continue
+			}
+			for _, s := range wt.Sessions {
+				rows = append(rows, row{project: p, worktree: wt, session: s})
+			}
+		}
+		for _, s := range own {
+			rows = append(rows, row{project: p, session: s})
+		}
+		return rows
+	}
 	for len(own) > 0 || len(wts) > 0 {
 		takeWorktree := len(own) == 0 ||
 			(len(wts) > 0 && wts[0].LastActivity.After(own[0].Started))
@@ -495,8 +519,7 @@ func (m Model) View() string {
 			state = "H to collapse"
 		}
 		b.WriteString(dimStyle.Render(fmt.Sprintf(
-			"  (%d project%s hidden — %s)",
-			hiddenCount, plural(hiddenCount), state)))
+			"  (%d hidden — %s)", hiddenCount, state)))
 		b.WriteString("\n")
 	}
 
@@ -505,6 +528,8 @@ func (m Model) View() string {
 	return b.String()
 }
 
+// hiddenProjectCount counts everything the user hid with opt+x — projects and
+// worktrees alike, since opt+h reveals both.
 func (m Model) hiddenProjectCount() int {
 	if m.cfg == nil {
 		return 0
@@ -513,6 +538,11 @@ func (m Model) hiddenProjectCount() int {
 	for _, p := range m.projects {
 		if m.cfg.Lookup(p.CWD).Hidden {
 			n++
+		}
+		for _, wt := range p.Worktrees {
+			if m.cfg.Lookup(wt.Dir).Hidden {
+				n++
+			}
 		}
 	}
 	return n
@@ -569,7 +599,7 @@ func (m Model) renderRows(rows []row, h int) string {
 		default:
 			line = m.renderChatRow(r.session, labelWidth, r.worktree != nil)
 		}
-		hidden := r.isProject() && m.cfg.Lookup(r.project.CWD).Hidden
+		hidden := !r.isChat() && m.cfg.Lookup(r.key()).Hidden
 		switch {
 		case i == m.cursor:
 			b.WriteString(hiStyle.Render("▶ " + line))
@@ -607,14 +637,22 @@ func (m Model) renderProjectRow(p *sessions.Project, labelWidth int, collisions 
 	}
 
 	var indicator, previewText string
-	if len(p.Sessions) > 0 {
+	switch {
+	case p.Offline:
+		indicator = dimStyle.Render("    ")
+		previewText = dimStyle.Render(offlineNote)
+	case len(p.Sessions) > 0:
 		indicator, previewText = m.sessionPreview(p.Sessions[0])
-	} else {
+	default:
 		indicator = dimStyle.Render("you ")
 		previewText = dimStyle.Render("(no sessions)")
 	}
 	return fmt.Sprintf("%-10s  %-*s  %s%s", ago, labelWidth, label, indicator, truncRunes(previewText, previewWidth))
 }
+
+// offlineNote replaces the preview on a row whose directory sits on a volume
+// that isn't mounted — the chats are real, the path just isn't reachable yet.
+const offlineNote = "(volume not mounted)"
 
 // renderWorktreeRow draws a worktree header under its project — same shape as a
 // project row, indented one level and marked with ⎇.
@@ -624,9 +662,15 @@ func (m Model) renderWorktreeRow(wt *sessions.Worktree, labelWidth int) string {
 	if m.expanded[wt.Dir] {
 		chevron = "▾"
 	}
-	label := "  " + chevron + " ⎇ " + truncRunes(wt.Name, labelWidth-6)
+	if m.renaming && m.renameTarget == wt.Dir {
+		return fmt.Sprintf("%-10s    %s ⎇ %s█", ago, chevron, m.renameBuf)
+	}
+	label := "  " + chevron + " ⎇ " + truncRunes(m.worktreeLabel(wt), labelWidth-6)
 	previewWidth := max(1, m.width-20-labelWidth)
 
+	if wt.Offline {
+		return fmt.Sprintf("%-10s  %-*s  %s", ago, labelWidth, label, dimStyle.Render(offlineNote))
+	}
 	if m.expanded[wt.Dir] {
 		n := len(wt.Sessions)
 		tail := dimStyle.Render(fmt.Sprintf("%d chat%s", n, plural(n)))
@@ -682,6 +726,29 @@ func (m Model) footerKeys() string {
 }
 
 // ---------- helpers ----------
+
+// worktreeLabel is the name shown on a worktree row — a custom name from config
+// wins over the directory name, same as for projects.
+func (m Model) worktreeLabel(wt *sessions.Worktree) string {
+	if ov := m.cfg.Lookup(wt.Dir); ov.Name != "" {
+		return ov.Name
+	}
+	return wt.Name
+}
+
+// visibleWorktrees drops the ones hidden via opt+x unless show-hidden is on.
+func (m Model) visibleWorktrees(p *sessions.Project) []*sessions.Worktree {
+	if m.showHidden {
+		return p.Worktrees
+	}
+	out := make([]*sessions.Worktree, 0, len(p.Worktrees))
+	for _, wt := range p.Worktrees {
+		if !m.cfg.Lookup(wt.Dir).Hidden {
+			out = append(out, wt)
+		}
+	}
+	return out
+}
 
 // displayLabel returns the label to render for a project. Custom name wins;
 // then auto-disambiguation when the basename collides with another visible
