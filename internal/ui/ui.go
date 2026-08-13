@@ -29,39 +29,68 @@ type Model struct {
 	projects []*sessions.Project
 	cfg      *config.Config
 
-	cursor             int
-	expanded           map[string]bool
-	filter             string
-	sort               sortOrder
-	showAssistant      bool
-	showHidden         bool
-	renaming           bool
-	renameBuf          string
-	renameTarget       string
-	width              int
-	height             int
-	hiddenMissingCount int
+	cursor        int
+	expanded      map[string]bool
+	filter        string
+	sort          sortOrder
+	showAssistant bool
+	showHidden    bool
+	renaming      bool
+	renameBuf     string
+	renameTarget  string
+	width         int
+	height        int
 
 	Action shell.Action
 	Done   bool
 }
 
-// row is one visible line in the unified list.
-// session == nil means the row is a project header.
+// row is one visible line in the unified list, at one of three depths: a project
+// header, a worktree header under it, or a chat under either.
 type row struct {
-	project *sessions.Project
-	session *sessions.Session
+	project  *sessions.Project
+	worktree *sessions.Worktree // set on a worktree header and on its chats
+	session  *sessions.Session
 }
 
-func (r row) isProject() bool { return r.session == nil }
+func (r row) isProject() bool  { return r.session == nil && r.worktree == nil }
+func (r row) isWorktree() bool { return r.session == nil && r.worktree != nil }
+func (r row) isChat() bool     { return r.session != nil }
 
-func New(ss []*sessions.Session, hiddenMissingCount int, cfg *config.Config) Model {
+// key is the expand/collapse key for a header row, and for a chat row the key of
+// the header it hangs under.
+func (r row) key() string {
+	if r.worktree != nil {
+		return r.worktree.Dir
+	}
+	return r.project.CWD
+}
+
+// dir is where enter/shift+enter should cd to for this row.
+func (r row) dir() string {
+	switch {
+	case r.session != nil:
+		return r.session.CWD
+	case r.worktree != nil:
+		return r.worktree.Dir
+	}
+	return r.project.CWD
+}
+
+// chats are the sessions a header row offers to resume, newest first.
+func (r row) chats() []*sessions.Session {
+	if r.worktree != nil {
+		return r.worktree.Sessions
+	}
+	return r.project.Sessions
+}
+
+func New(ss []*sessions.Session, cfg *config.Config) Model {
 	return Model{
-		sessions:           ss,
-		projects:           sessions.GroupByProject(ss),
-		cfg:                cfg,
-		expanded:           map[string]bool{},
-		hiddenMissingCount: hiddenMissingCount,
+		sessions: ss,
+		projects: sessions.GroupByProject(ss),
+		cfg:      cfg,
+		expanded: map[string]bool{},
 	}
 }
 
@@ -231,15 +260,15 @@ func (m Model) beginRename() Model {
 	return m
 }
 
-// expandOrDescend: on a collapsed project row, expand. On an already-expanded
-// project row, move cursor to first child. On a chat row, no-op.
+// expandOrDescend: on a collapsed header row (project or worktree), expand. On
+// an already-expanded one, move cursor to its first child. On a chat row, no-op.
 func (m Model) expandOrDescend() Model {
 	r, ok := m.selectedRow()
-	if !ok || !r.isProject() {
+	if !ok || r.isChat() {
 		return m
 	}
-	if !m.expanded[r.project.CWD] {
-		m.expanded[r.project.CWD] = true
+	if !m.expanded[r.key()] {
+		m.expanded[r.key()] = true
 		return m
 	}
 	if m.cursor < m.maxCursor() {
@@ -248,24 +277,24 @@ func (m Model) expandOrDescend() Model {
 	return m
 }
 
-// collapseOrAscend: on an expanded project row, collapse. On a chat row, jump
-// to parent project and collapse it.
+// collapseOrAscend: on an expanded header row, collapse it. On a chat row, jump
+// to the header it hangs under (its worktree, else its project) and collapse it.
 func (m Model) collapseOrAscend() Model {
 	r, ok := m.selectedRow()
 	if !ok {
 		return m
 	}
-	cwd := r.project.CWD
-	if !r.isProject() {
-		m.cursor = m.projectRowIndex(cwd)
+	key := r.key()
+	if r.isChat() {
+		m.cursor = m.headerRowIndex(key)
 	}
-	delete(m.expanded, cwd)
+	delete(m.expanded, key)
 	return m
 }
 
-func (m Model) projectRowIndex(cwd string) int {
+func (m Model) headerRowIndex(key string) int {
 	for i, r := range m.visibleRows() {
-		if r.isProject() && r.project.CWD == cwd {
+		if !r.isChat() && r.key() == key {
 			return i
 		}
 	}
@@ -285,10 +314,10 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if r.isProject() {
-		m.Action = shell.Action{Dir: r.project.CWD, NewClaude: true}
-	} else {
+	if r.isChat() {
 		m.Action = shell.Action{Dir: r.session.CWD, Resume: r.session.ID}
+	} else {
+		m.Action = shell.Action{Dir: r.dir(), NewClaude: true}
 	}
 	m.Done = true
 	return m, tea.Quit
@@ -299,11 +328,7 @@ func (m Model) activateCD() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	dir := r.project.CWD
-	if !r.isProject() {
-		dir = r.session.CWD
-	}
-	m.Action = shell.Action{Dir: dir}
+	m.Action = shell.Action{Dir: r.dir()}
 	m.Done = true
 	return m, tea.Quit
 }
@@ -313,16 +338,19 @@ func (m Model) activateResumeLatest() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if !r.isProject() {
+	if r.isChat() {
 		// On a chat row, R is equivalent to enter — resume this chat.
 		m.Action = shell.Action{Dir: r.session.CWD, Resume: r.session.ID}
 		m.Done = true
 		return m, tea.Quit
 	}
-	if len(r.project.Sessions) == 0 {
+	chats := r.chats()
+	if len(chats) == 0 {
 		return m.activate()
 	}
-	m.Action = shell.Action{Dir: r.project.CWD, Resume: r.project.Sessions[0].ID}
+	// The newest chat under a project may have run in one of its worktrees, so
+	// cd to that chat's own directory rather than the project root.
+	m.Action = shell.Action{Dir: chats[0].CWD, Resume: chats[0].ID}
 	m.Done = true
 	return m, tea.Quit
 }
@@ -388,8 +416,33 @@ func (m Model) visibleRows() []row {
 		if !m.expanded[p.CWD] {
 			continue
 		}
-		for _, s := range p.Sessions {
-			rows = append(rows, row{project: p, session: s})
+		rows = append(rows, m.childRows(p)...)
+	}
+	return rows
+}
+
+// childRows lays out a project's children: its own chats and its worktrees,
+// interleaved by recency so the newest thing in the repo is always on top. A
+// worktree's own chats follow it when it's expanded.
+func (m Model) childRows(p *sessions.Project) []row {
+	var rows []row
+	own, wts := p.Own, p.Worktrees
+	for len(own) > 0 || len(wts) > 0 {
+		takeWorktree := len(own) == 0 ||
+			(len(wts) > 0 && wts[0].LastActivity.After(own[0].Started))
+		if !takeWorktree {
+			rows = append(rows, row{project: p, session: own[0]})
+			own = own[1:]
+			continue
+		}
+		wt := wts[0]
+		wts = wts[1:]
+		rows = append(rows, row{project: p, worktree: wt})
+		if !m.expanded[wt.Dir] {
+			continue
+		}
+		for _, s := range wt.Sessions {
+			rows = append(rows, row{project: p, worktree: wt, session: s})
 		}
 	}
 	return rows
@@ -428,9 +481,6 @@ func (m Model) View() string {
 	hiddenCount := m.hiddenProjectCount()
 
 	listH := m.height - 4
-	if m.hiddenMissingCount > 0 {
-		listH--
-	}
 	if hiddenCount > 0 {
 		listH--
 	}
@@ -439,12 +489,6 @@ func (m Model) View() string {
 	}
 	b.WriteString(m.renderRows(m.visibleRows(), listH))
 
-	if m.hiddenMissingCount > 0 {
-		b.WriteString(dimStyle.Render(fmt.Sprintf(
-			"  (%d session%s hidden — directories no longer exist)",
-			m.hiddenMissingCount, plural(m.hiddenMissingCount))))
-		b.WriteString("\n")
-	}
 	if hiddenCount > 0 {
 		state := "H to view"
 		if m.showHidden {
@@ -517,10 +561,13 @@ func (m Model) renderRows(rows []row, h int) string {
 	for i := start; i < end; i++ {
 		r := rows[i]
 		var line string
-		if r.isProject() {
+		switch {
+		case r.isProject():
 			line = m.renderProjectRow(r.project, labelWidth, collisions)
-		} else {
-			line = m.renderChatRow(r.session, labelWidth)
+		case r.isWorktree():
+			line = m.renderWorktreeRow(r.worktree, labelWidth)
+		default:
+			line = m.renderChatRow(r.session, labelWidth, r.worktree != nil)
 		}
 		hidden := r.isProject() && m.cfg.Lookup(r.project.CWD).Hidden
 		switch {
@@ -569,14 +616,34 @@ func (m Model) renderProjectRow(p *sessions.Project, labelWidth int, collisions 
 	return fmt.Sprintf("%-10s  %-*s  %s%s", ago, labelWidth, label, indicator, truncRunes(previewText, previewWidth))
 }
 
-func (m Model) renderChatRow(s *sessions.Session, labelWidth int) string {
+// renderWorktreeRow draws a worktree header under its project — same shape as a
+// project row, indented one level and marked with ⎇.
+func (m Model) renderWorktreeRow(wt *sessions.Worktree, labelWidth int) string {
+	ago := humanAgo(wt.LastActivity)
+	chevron := "▸"
+	if m.expanded[wt.Dir] {
+		chevron = "▾"
+	}
+	label := "  " + chevron + " ⎇ " + truncRunes(wt.Name, labelWidth-6)
+	previewWidth := max(1, m.width-20-labelWidth)
+
+	if m.expanded[wt.Dir] {
+		n := len(wt.Sessions)
+		tail := dimStyle.Render(fmt.Sprintf("%d chat%s", n, plural(n)))
+		return fmt.Sprintf("%-10s  %-*s  %s", ago, labelWidth, label, tail)
+	}
+	indicator, preview := m.sessionPreview(wt.Sessions[0])
+	return fmt.Sprintf("%-10s  %-*s  %s%s", ago, labelWidth, label, indicator, truncRunes(preview, previewWidth))
+}
+
+// renderChatRow draws one chat. nested chats hang under a worktree header rather
+// than directly under the project, so they indent one level further.
+func (m Model) renderChatRow(s *sessions.Session, labelWidth int, nested bool) string {
 	ago := humanAgo(s.Started)
 	indicator, preview := m.sessionPreview(s)
-	// A chat from one of the repo's git worktrees is tagged with the worktree
-	// directory name, since the project row above it names the main checkout.
 	plain := "  └"
-	if s.Worktree != "" {
-		plain += " ⎇ " + s.Worktree
+	if nested {
+		plain = "      └"
 	}
 	label := dimStyle.Render(truncRunes(plain, labelWidth))
 	previewWidth := max(1, m.width-20-labelWidth)
@@ -608,7 +675,7 @@ func (m Model) footerKeys() string {
 		return "↵  save   esc  cancel   (empty + ↵ to clear)"
 	}
 	r, ok := m.selectedRow()
-	if ok && !r.isProject() {
+	if ok && r.isChat() {
 		return fmt.Sprintf("type to filter   ↵ cd+resume   shift+↵ cd   ←/→ collapse/expand   ^n/^p move   %[1]s+s sort   %[1]s+p preview   esc clear   ^c quit", modKey)
 	}
 	return fmt.Sprintf("type to filter   ↵ cd+claude   ^r resume   shift+↵ cd   ←/→ collapse/expand   ^n/^p move   %[1]s+x hide   %[1]s+r rename   %[1]s+s sort   %[1]s+p preview   %[1]s+h show-hidden   esc clear   ^c quit", modKey)

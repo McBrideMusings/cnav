@@ -69,6 +69,6 @@ Identical basenames are auto-disambiguated in the list (`.claude (pierce/)`, `.c
 - A session's project path comes from the first `cwd` field in its jsonl (the slug-encoded directory name isn't reversible if a path component contains `-`).
 - The preview column shows your last message by default; press `p` to switch to Claude's longest reply. Each row shows a dim `you` / `ai` prefix so the active mode is visible without looking at the header. `/clear`, `/compact`, and `/reset` are skipped when determining the last user message. System-injected XML blocks are stripped from preview text.
 - Filtering searches across **all** sessions in every project, not just the newest. If a match comes from an older chat, that project auto-expands and only the matching chats are shown.
-- Chats from a repo's git worktrees are listed under the repo's main checkout, not as separate projects. Each such chat row is tagged `⎇ <worktree-dir-name>`. The link is read from the worktree's `.git` file, so it works no matter where the worktree lives on disk.
-- Sessions whose directory no longer exists on disk are hidden, with a count in the footer — retired worktrees, deleted temp dirs, moved projects.
+- A repo's git worktrees appear as `⎇ <name>` rows under the repo, not as separate projects, and expand into their own chats. The link back to the main checkout is read from the worktree's `.git` file, so it works no matter where the worktree lives on disk.
+- Sessions whose directory no longer exists — retired worktrees, deleted temp dirs, moved projects — are dropped entirely. They are not hidden and there is no key to bring them back.
 - Active state (sort order, preview mode, filter text) is shown inline in the header next to the `cnav` title.

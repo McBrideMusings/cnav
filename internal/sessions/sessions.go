@@ -29,11 +29,21 @@ type Session struct {
 	AssistantPreview string    // last assistant text block, truncated
 }
 
-// Project groups sessions by repo root. Sessions from a repo's git worktrees
-// land in the same Project as the main checkout; each session keeps its own CWD.
+// Project groups sessions by repo root. Chats run in the repo's git worktrees
+// hang off the same Project as the main checkout, one Worktree per directory.
 type Project struct {
 	CWD          string
-	Sessions     []*Session // newest first
+	Sessions     []*Session  // every chat, main checkout and worktrees alike, newest first
+	Own          []*Session  // chats run in CWD itself, newest first
+	Worktrees    []*Worktree // newest activity first
+	LastActivity time.Time
+}
+
+// Worktree is one git worktree of a Project, with the chats run inside it.
+type Worktree struct {
+	Dir          string // the worktree directory itself
+	Name         string // its directory name, shown on the row
+	Sessions     []*Session
 	LastActivity time.Time
 }
 
@@ -76,12 +86,12 @@ type userMsg struct {
 	Content json.RawMessage `json:"content"`
 }
 
-// Scan walks ~/.claude/projects/ and returns every session it can parse.
-// Sessions are returned sorted by Started desc.
-func Scan(claudeProjectsDir string) ([]*Session, int, error) {
+// Scan walks ~/.claude/projects/ and returns every session it can parse whose
+// directory still exists. Sessions are returned sorted by Started desc.
+func Scan(claudeProjectsDir string) ([]*Session, error) {
 	entries, err := os.ReadDir(claudeProjectsDir)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
 	var files []string
@@ -120,8 +130,8 @@ func Scan(claudeProjectsDir string) ([]*Session, int, error) {
 	wg.Wait()
 
 	// Drop sessions whose directory is gone — retired worktrees, deleted temp
-	// dirs, moved projects. There is nowhere to cd to, so the row is dead weight.
-	hiddenCount := 0
+	// dirs, moved projects. There is nowhere to cd to, so they are not hidden or
+	// recoverable, they simply don't exist as far as the list is concerned.
 	exists := map[string]bool{}
 	out := slices.DeleteFunc(sessions, func(s *Session) bool {
 		if s == nil {
@@ -133,9 +143,6 @@ func Scan(claudeProjectsDir string) ([]*Session, int, error) {
 			ok = err == nil
 			exists[s.CWD] = ok
 		}
-		if !ok {
-			hiddenCount++
-		}
 		return !ok
 	})
 
@@ -144,7 +151,7 @@ func Scan(claudeProjectsDir string) ([]*Session, int, error) {
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Started.After(out[j].Started)
 	})
-	return out, hiddenCount, nil
+	return out, nil
 }
 
 // resolveRoots fills Root/Worktree on every session, resolving each distinct CWD
@@ -379,6 +386,7 @@ func truncate(s string, n int) string {
 // sessions bucket into their main checkout rather than standing alone.
 func GroupByProject(sessions []*Session) []*Project {
 	m := map[string]*Project{}
+	wtByDir := map[string]*Worktree{}
 	for _, s := range sessions {
 		key := s.Root
 		if key == "" {
@@ -393,11 +401,30 @@ func GroupByProject(sessions []*Session) []*Project {
 		if s.Started.After(p.LastActivity) {
 			p.LastActivity = s.Started
 		}
+		if s.Worktree == "" {
+			p.Own = append(p.Own, s)
+			continue
+		}
+		wt := wtByDir[s.CWD]
+		if wt == nil {
+			wt = &Worktree{Dir: s.CWD, Name: s.Worktree}
+			wtByDir[s.CWD] = wt
+			p.Worktrees = append(p.Worktrees, wt)
+		}
+		wt.Sessions = append(wt.Sessions, s)
+		if s.Started.After(wt.LastActivity) {
+			wt.LastActivity = s.Started
+		}
 	}
 	out := make([]*Project, 0, len(m))
 	for _, p := range m {
-		sort.Slice(p.Sessions, func(i, j int) bool {
-			return p.Sessions[i].Started.After(p.Sessions[j].Started)
+		sortByStarted(p.Sessions)
+		sortByStarted(p.Own)
+		for _, wt := range p.Worktrees {
+			sortByStarted(wt.Sessions)
+		}
+		sort.Slice(p.Worktrees, func(i, j int) bool {
+			return p.Worktrees[i].LastActivity.After(p.Worktrees[j].LastActivity)
 		})
 		out = append(out, p)
 	}
@@ -405,6 +432,10 @@ func GroupByProject(sessions []*Session) []*Project {
 		return out[i].LastActivity.After(out[j].LastActivity)
 	})
 	return out
+}
+
+func sortByStarted(ss []*Session) {
+	sort.Slice(ss, func(i, j int) bool { return ss[i].Started.After(ss[j].Started) })
 }
 
 // DefaultProjectsDir returns ~/.claude/projects.

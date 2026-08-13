@@ -73,4 +73,14 @@ func TestGroupByProjectFoldsWorktrees(t *testing.T) {
 	if len(p.Sessions) != 2 {
 		t.Errorf("%s has %d sessions, want 2 (main + worktree)", root, len(p.Sessions))
 	}
+	if len(p.Own) != 1 || p.Own[0].ID != "a" {
+		t.Errorf("Own = %v, want just the main-checkout chat a", p.Own)
+	}
+	if len(p.Worktrees) != 1 {
+		t.Fatalf("got %d worktrees, want 1", len(p.Worktrees))
+	}
+	wt := p.Worktrees[0]
+	if wt.Name != "issue-114" || len(wt.Sessions) != 1 || wt.Sessions[0].ID != "b" {
+		t.Errorf("worktree = %+v, want issue-114 holding chat b", wt)
+	}
 }
