@@ -15,8 +15,9 @@ Claude Code stores sessions under `~/.claude/projects/`, one subdirectory per wo
 - `cd` + launch fresh Claude session
 - `cd` + resume a specific session by ID
 - Hide and rename projects (stored in `~/.config/cnav/config.toml`)
-- Type-to-filter projects by name (matches the project path/label, not chat contents)
+- Type-to-filter projects by name (matches the project path/label and worktree names, not chat contents)
 - Preview of last user message or longest assistant reply
+- Git worktrees nested under their repo as expandable rows, resolved from the worktree's `.git` file
 
 **Out of scope:**
 - Editing or deleting sessions
@@ -29,4 +30,5 @@ Claude Code stores sessions under `~/.claude/projects/`, one subdirectory per wo
 - Binary must not change its parent shell's directory — shell wrapper required
 - TUI must render on stderr; stdout reserved for the eval'd command
 - Session list built fresh on every launch (no persistent cache)
+- A session whose directory no longer exists is dropped outright — never listed, counted, or recoverable
 - Large files (>5 MB) require a two-phase scan to stay fast

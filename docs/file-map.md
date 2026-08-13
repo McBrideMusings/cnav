@@ -10,7 +10,7 @@
 
 | Path | Role |
 |---|---|
-| `internal/sessions/` | JSONL scanner — reads `~/.claude/projects/`, produces `Session`/`Project` types |
+| `internal/sessions/` | JSONL scanner — reads `~/.claude/projects/`, produces `Session`/`Project`/`Worktree` types (`sessions_test.go` covers repo-root resolution and grouping) |
 | `internal/ui/` | Bubble Tea model and all view rendering |
 | `internal/config/` | Reads/writes `~/.config/cnav/config.toml` (hide/rename) |
 | `internal/shell/` | `Action.Render()` shell quoting + `WrapperScript` constant |
