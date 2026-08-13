@@ -5,6 +5,7 @@
 .DS_Store
 *.local
 .claude/*.local.md
+.claude/skills/verify/
 docs/.vitepress/cache
 docs/.vitepress/dist
 node_modules
