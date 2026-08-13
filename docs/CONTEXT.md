@@ -10,11 +10,13 @@ A small TUI for jumping between Claude Code projects and resuming past chats.
 
 **session** — one Claude Code conversation, stored as a single `.jsonl` file under `~/.claude/projects/<slug>/`.
 
-**project** — a directory that Claude Code has run in; groups one or more sessions by `CWD`.
+**project** — a git repository's main checkout (or, for a non-repo directory, the directory itself); groups one or more sessions by their **repo root**.
+
+**repo root** — the main checkout a session's `CWD` belongs to. Read from `<cwd>/.git`: in a git worktree that's a file holding `gitdir: <repo>/.git/worktrees/<name>`, which is the only reliable link back since a worktree can live anywhere on disk. Everything else (a normal checkout, a submodule, a non-repo dir) is its own root.
 
 **CWD** — the working directory recorded in the first `cwd` field of a session's JSONL; the canonical key for a project. Note: the slug-encoded directory name in the filesystem path is *not* used because the encoding isn't reversible when a path component contains a hyphen.
 
-**worktree session** — a session whose `CWD` contains `/.worktrees/`; silently dropped by `Scan` if the directory no longer exists on disk.
+**worktree session** — a session whose `CWD` is a git worktree. It groups under its repo root and its chat row is tagged `⎇ <worktree-dir-name>`. Silently dropped by `Scan` if the directory no longer exists on disk (matched on the `/.worktrees/` path convention, since a deleted directory has no `.git` file left to read).
 
 **action** — the `shell.Action` struct that the TUI sets on exit. `Action.Render()` produces the shell command string (`cd`, optionally `&& claude` or `&& claude --resume <id>`) written to stdout for the wrapper to eval. Empty string means quit with no action.
 

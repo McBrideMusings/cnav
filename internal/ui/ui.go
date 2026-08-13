@@ -357,6 +357,14 @@ func (m Model) filteredProjects() []*sessions.Project {
 		if ov.Name != "" {
 			nameMatch = nameMatch || containsCI(ov.Name, q)
 		}
+		// Worktree names are only visible on chat rows, so match them here too —
+		// otherwise typing a branch name hides the project holding that chat.
+		for _, s := range p.Sessions {
+			if nameMatch {
+				break
+			}
+			nameMatch = s.Worktree != "" && containsCI(s.Worktree, q)
+		}
 		if nameMatch {
 			projs = append(projs, p)
 		}
@@ -542,9 +550,6 @@ func (m Model) renderProjectRow(p *sessions.Project, labelWidth int, collisions 
 	}
 
 	projLabel := m.displayLabel(p.CWD, collisions)
-	if isWorktree(p.CWD) {
-		projLabel = "⎇ " + projLabel
-	}
 	label := chevron + " " + truncRunes(projLabel, labelWidth-2)
 	previewWidth := max(1, m.width-20-labelWidth)
 
@@ -567,7 +572,13 @@ func (m Model) renderProjectRow(p *sessions.Project, labelWidth int, collisions 
 func (m Model) renderChatRow(s *sessions.Session, labelWidth int) string {
 	ago := humanAgo(s.Started)
 	indicator, preview := m.sessionPreview(s)
-	label := dimStyle.Render("  └")
+	// A chat from one of the repo's git worktrees is tagged with the worktree
+	// directory name, since the project row above it names the main checkout.
+	plain := "  └"
+	if s.Worktree != "" {
+		plain += " ⎇ " + s.Worktree
+	}
+	label := dimStyle.Render(truncRunes(plain, labelWidth))
 	previewWidth := max(1, m.width-20-labelWidth)
 	return fmt.Sprintf("%-10s  %-*s  %s%s", ago, labelWidth, label, indicator, truncRunes(preview, previewWidth))
 }
@@ -605,24 +616,13 @@ func (m Model) footerKeys() string {
 
 // ---------- helpers ----------
 
-const wtSep = "/.worktrees/"
-
-func isWorktree(cwd string) bool {
-	_, _, found := strings.Cut(cwd, wtSep)
-	return found
-}
-
 // displayLabel returns the label to render for a project. Custom name wins;
-// then worktree formatting; then auto-disambiguation when the basename collides
-// with another visible project (collisions == nil disables disambiguation —
-// callers like sort pass nil so order is stable regardless of which projects
-// are currently visible).
+// then auto-disambiguation when the basename collides with another visible
+// project (collisions == nil disables disambiguation — callers like sort pass
+// nil so order is stable regardless of which projects are currently visible).
 func (m Model) displayLabel(cwd string, collisions map[string]int) string {
 	if ov := m.cfg.Lookup(cwd); ov.Name != "" {
 		return ov.Name
-	}
-	if before, after, ok := strings.Cut(cwd, wtSep); ok {
-		return filepath.Base(before) + " → " + after
 	}
 	base := filepath.Base(cwd)
 	if collisions != nil && collisions[base] > 1 {
@@ -633,15 +633,11 @@ func (m Model) displayLabel(cwd string, collisions map[string]int) string {
 }
 
 // collisionCounts tallies basenames across the given visible projects, skipping
-// projects with a custom name (those don't need disambiguation) and worktree
-// rows (those already disambiguate via the "→ branch-path" form).
+// projects with a custom name (those don't need disambiguation).
 func (m Model) collisionCounts(projs []*sessions.Project) map[string]int {
 	counts := map[string]int{}
 	for _, p := range projs {
 		if m.cfg.Lookup(p.CWD).Name != "" {
-			continue
-		}
-		if strings.Contains(p.CWD, wtSep) {
 			continue
 		}
 		counts[filepath.Base(p.CWD)]++

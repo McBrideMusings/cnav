@@ -20,6 +20,8 @@ import (
 type Session struct {
 	ID               string    // sessionId
 	CWD              string    // project dir claude ran in
+	Root             string    // main repo checkout for CWD (== CWD unless CWD is a git worktree)
+	Worktree         string    // worktree directory name when CWD is a git worktree, else ""
 	File             string    // absolute path to jsonl
 	ModTime          time.Time // file mtime
 	Started          time.Time // first user-message timestamp (fallback: ModTime)
@@ -27,7 +29,8 @@ type Session struct {
 	AssistantPreview string    // last assistant text block, truncated
 }
 
-// Project groups sessions by CWD.
+// Project groups sessions by repo root. Sessions from a repo's git worktrees
+// land in the same Project as the main checkout; each session keeps its own CWD.
 type Project struct {
 	CWD          string
 	Sessions     []*Session // newest first
@@ -131,10 +134,48 @@ func Scan(claudeProjectsDir string) ([]*Session, int, error) {
 		return true
 	})
 
+	resolveRoots(out)
+
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Started.After(out[j].Started)
 	})
 	return out, hiddenCount, nil
+}
+
+// resolveRoots fills Root/Worktree on every session, resolving each distinct CWD
+// once.
+func resolveRoots(ss []*Session) {
+	type rw struct{ root, worktree string }
+	cache := map[string]rw{}
+	for _, s := range ss {
+		v, ok := cache[s.CWD]
+		if !ok {
+			v.root, v.worktree = repoRoot(s.CWD)
+			cache[s.CWD] = v
+		}
+		s.Root, s.Worktree = v.root, v.worktree
+	}
+}
+
+// repoRoot maps a directory to the main repository checkout it belongs to. A git
+// worktree's .git is a file holding "gitdir: <repo>/.git/worktrees/<name>" — the
+// only reliable link back, since a worktree can live anywhere on disk. Anything
+// else (a normal checkout, a submodule, a non-repo dir) maps to itself.
+func repoRoot(cwd string) (root, worktree string) {
+	b, err := os.ReadFile(filepath.Join(cwd, ".git"))
+	if err != nil {
+		return cwd, ""
+	}
+	gitdir := strings.TrimSpace(string(b))
+	if !strings.HasPrefix(gitdir, "gitdir:") {
+		return cwd, ""
+	}
+	gitdir = strings.TrimSpace(strings.TrimPrefix(gitdir, "gitdir:"))
+	before, name, ok := strings.Cut(gitdir, "/.git/worktrees/")
+	if !ok || before == "" || name == "" {
+		return cwd, ""
+	}
+	return before, filepath.Base(name)
 }
 
 func parseSession(path string) (*Session, error) {
@@ -329,14 +370,19 @@ func truncate(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// GroupByProject buckets sessions by CWD, newest activity first.
+// GroupByProject buckets sessions by repo root, newest activity first. Worktree
+// sessions bucket into their main checkout rather than standing alone.
 func GroupByProject(sessions []*Session) []*Project {
 	m := map[string]*Project{}
 	for _, s := range sessions {
-		p, ok := m[s.CWD]
+		key := s.Root
+		if key == "" {
+			key = s.CWD
+		}
+		p, ok := m[key]
 		if !ok {
-			p = &Project{CWD: s.CWD}
-			m[s.CWD] = p
+			p = &Project{CWD: key}
+			m[key] = p
 		}
 		p.Sessions = append(p.Sessions, s)
 		if s.Started.After(p.LastActivity) {
