@@ -56,6 +56,6 @@ Don't write new top-level planning / phase / feature docs in `docs/` — file a 
 - `ui.Model` is value-typed (Bubble Tea pattern) — all state mutations return a new model.
 - Config writes are non-fatal: `saveConfig` prints to stderr and keeps running on failure.
 - Session CWD comes from the first `cwd` field in the JSONL, not the slug-encoded directory name (which isn't reliably reversible).
-- Worktree sessions whose directories no longer exist on disk are silently dropped in `Scan`.
+- Sessions whose `CWD` no longer exists on disk are silently dropped in `Scan` — there is nowhere to `cd`, so the row is dead weight. The footer reports the count.
 - A session's repo root comes from reading `<cwd>/.git` — a git worktree's `.git` is a file holding `gitdir: <repo>/.git/worktrees/<name>`. Worktrees can live anywhere on disk, so path patterns are never used to detect them. `GroupByProject` buckets on that root, so a repo's worktree chats appear under the main checkout, tagged `⎇ <worktree>` on the chat row.
 - Basename collisions in the project list are auto-disambiguated by appending the parent directory (`base (parent/)`); a manual `name` in config always wins.

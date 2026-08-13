@@ -29,18 +29,18 @@ type Model struct {
 	projects []*sessions.Project
 	cfg      *config.Config
 
-	cursor              int
-	expanded            map[string]bool
-	filter              string
-	sort                sortOrder
-	showAssistant       bool
-	showHidden          bool
-	renaming            bool
-	renameBuf           string
-	renameTarget        string
-	width               int
-	height              int
-	hiddenWorktreeCount int
+	cursor             int
+	expanded           map[string]bool
+	filter             string
+	sort               sortOrder
+	showAssistant      bool
+	showHidden         bool
+	renaming           bool
+	renameBuf          string
+	renameTarget       string
+	width              int
+	height             int
+	hiddenMissingCount int
 
 	Action shell.Action
 	Done   bool
@@ -55,13 +55,13 @@ type row struct {
 
 func (r row) isProject() bool { return r.session == nil }
 
-func New(ss []*sessions.Session, hiddenWorktreeCount int, cfg *config.Config) Model {
+func New(ss []*sessions.Session, hiddenMissingCount int, cfg *config.Config) Model {
 	return Model{
-		sessions:            ss,
-		projects:            sessions.GroupByProject(ss),
-		cfg:                 cfg,
-		expanded:            map[string]bool{},
-		hiddenWorktreeCount: hiddenWorktreeCount,
+		sessions:           ss,
+		projects:           sessions.GroupByProject(ss),
+		cfg:                cfg,
+		expanded:           map[string]bool{},
+		hiddenMissingCount: hiddenMissingCount,
 	}
 }
 
@@ -428,7 +428,7 @@ func (m Model) View() string {
 	hiddenCount := m.hiddenProjectCount()
 
 	listH := m.height - 4
-	if m.hiddenWorktreeCount > 0 {
+	if m.hiddenMissingCount > 0 {
 		listH--
 	}
 	if hiddenCount > 0 {
@@ -439,10 +439,10 @@ func (m Model) View() string {
 	}
 	b.WriteString(m.renderRows(m.visibleRows(), listH))
 
-	if m.hiddenWorktreeCount > 0 {
+	if m.hiddenMissingCount > 0 {
 		b.WriteString(dimStyle.Render(fmt.Sprintf(
-			"  (%d worktree session%s hidden — directories deleted)",
-			m.hiddenWorktreeCount, plural(m.hiddenWorktreeCount))))
+			"  (%d session%s hidden — directories no longer exist)",
+			m.hiddenMissingCount, plural(m.hiddenMissingCount))))
 		b.WriteString("\n")
 	}
 	if hiddenCount > 0 {

@@ -119,19 +119,24 @@ func Scan(claudeProjectsDir string) ([]*Session, int, error) {
 	}
 	wg.Wait()
 
+	// Drop sessions whose directory is gone — retired worktrees, deleted temp
+	// dirs, moved projects. There is nowhere to cd to, so the row is dead weight.
 	hiddenCount := 0
+	exists := map[string]bool{}
 	out := slices.DeleteFunc(sessions, func(s *Session) bool {
 		if s == nil {
 			return true
 		}
-		if !strings.Contains(s.CWD, "/.worktrees/") {
-			return false
+		ok, seen := exists[s.CWD]
+		if !seen {
+			_, err := os.Stat(s.CWD)
+			ok = err == nil
+			exists[s.CWD] = ok
 		}
-		if _, err := os.Stat(s.CWD); err == nil {
-			return false
+		if !ok {
+			hiddenCount++
 		}
-		hiddenCount++
-		return true
+		return !ok
 	})
 
 	resolveRoots(out)
